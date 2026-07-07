@@ -43,3 +43,5 @@ SQL calculates. Rules decide. Memory contextualizes. LLM explains. Verification 
 Favor readability, modularity, composition, dependency injection. Write tests — the shared engines package (`@xerebro/engines`) holds the most-tested code in the repo and must stay a pure function of its inputs (no platform APIs, no network). Keep functions small. Do not over-engineer.
 
 Always explain architectural tradeoffs. If multiple designs exist: present options, recommend one, explain why. If a change materially affects system design, wait for Aaron's approval before implementing.
+
+Explain ALL implemented code and architecture in laymans terms for me to learn
