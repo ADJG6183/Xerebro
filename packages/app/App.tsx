@@ -14,15 +14,16 @@ import {
   Text,
   View,
 } from "react-native";
+import { resolveApiUrl } from "./src/data/apiUrl";
 import { buildDashboardViewModel, type DashboardViewModel } from "./src/data/dashboardModel";
 import type { DeviceEventLog } from "./src/data/deviceLog";
 import { httpTransport } from "./src/data/httpTransport";
-import { openSqliteDeviceLog } from "./src/data/sqliteLog";
+import { openDeviceLog } from "./src/data/openDeviceLog";
 import { pullOnce, pushUserEvents, type SyncTransport } from "./src/data/syncClient";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "./src/data/userEvents";
 
 const USER_ID = "user-1"; // real auth arrives with the security milestone
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000";
+const API_URL = resolveApiUrl();
 
 const factoryDeps: EventFactoryDeps = {
   newId: () => `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
@@ -65,7 +66,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const deviceLog = await openSqliteDeviceLog();
+      const deviceLog = await openDeviceLog();
       if (cancelled) return;
       setLog(deviceLog);
       await rebuild(deviceLog); // paint from cache FIRST
