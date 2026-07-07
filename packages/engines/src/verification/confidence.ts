@@ -6,8 +6,8 @@
  * app orchestration layer; engines are forbidden network access, so this
  * module only scores what orchestration hands it.
  */
-import type { MinorUnits } from "../money.js";
-import { assertMinorUnits } from "../money.js";
+import type { MinorUnits } from "../money";
+import { assertMinorUnits } from "../money";
 
 export const HIGH_STAKES_CONFIDENCE_THRESHOLD = 0.8;
 export const PURCHASE_FRESHNESS_WINDOW_SECONDS = 12 * 60 * 60; // 12h (docs/verificationEngine.md)

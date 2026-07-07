@@ -1,0 +1,43 @@
+/**
+ * Builders for events a device sends up (source "user" — the server rejects
+ * anything else from this path). Id/clock are injectable so tests stay
+ * deterministic; the app runtime passes real ones.
+ */
+import type { Account, EventEnvelope, TransactionPostedPayload } from "@xerebro/engines";
+
+export interface EventFactoryDeps {
+  newId: () => string;
+  nowIso: () => string;
+  deviceId: string;
+}
+
+export type OutgoingEvent = Omit<EventEnvelope, "sequence">;
+
+export function makeUserEvent(
+  deps: EventFactoryDeps,
+  type: string,
+  payload: unknown,
+  /** Stable per action — resending after a dropped connection must dedupe. */
+  actionKey: string,
+): OutgoingEvent {
+  return {
+    eventId: deps.newId(),
+    type,
+    schemaVersion: 1,
+    occurredAt: deps.nowIso(),
+    source: "user",
+    idempotencyKey: `${deps.deviceId}:${actionKey}`,
+    payload,
+  };
+}
+
+export function accountUpserted(deps: EventFactoryDeps, account: Account): OutgoingEvent {
+  return makeUserEvent(deps, "AccountUpserted", account, `account:${account.accountId}`);
+}
+
+export function manualTransaction(
+  deps: EventFactoryDeps,
+  payload: TransactionPostedPayload,
+): OutgoingEvent {
+  return makeUserEvent(deps, "TransactionPosted", payload, `txn:${payload.txnId}`);
+}

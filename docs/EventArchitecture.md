@@ -10,7 +10,9 @@ Every event carries: `event_id`, server-assigned `sequence` (the global order, g
 
 **Aggregator (via Plaid ACL):** `TransactionPosted` · `TransactionUpdated` · `TransactionRemoved` · `BankConnected` · `BankDisconnected` · `SyncCompleted` · `SyncFailed`
 
-**User:** `BucketCreated` · `BucketUpdated` · `GoalCreated` · `TransactionAnnotated` · `FeedbackSubmitted` · `ManualTransactionEntered` · `VoiceFactConfirmed` (post-v1)
+**User:** `AccountUpserted` (manual accounts) · `BucketCreated` · `BucketUpdated` · `GoalCreated` · `TransactionAnnotated` · `FeedbackSubmitted` · `VoiceFactConfirmed` (post-v1)
+
+Manual transactions are ordinary `TransactionPosted` events with `source: "user"` — one event type per fact, distinguished by provenance, so the fold has a single code path. (`AccountUpserted` with `source: "plaid"` will carry aggregator account metadata/balances when balance sync lands.)
 
 **Detectors (derived from state — see below):** `PaycheckReceived` · `GoalCompleted` · `OverspendingDetected` · `BillDueSoon`
 

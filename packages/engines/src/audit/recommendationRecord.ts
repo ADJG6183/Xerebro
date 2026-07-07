@@ -3,8 +3,8 @@
  * Reconstructable by RETRIEVAL, not regeneration: this record IS the
  * recommendation as shown; nothing in it is ever recomputed for display.
  */
-import type { PurchaseDecision } from "../decision/purchaseApproval.js";
-import type { VerificationResult } from "../verification/confidence.js";
+import type { PurchaseDecision } from "../decision/purchaseApproval";
+import type { VerificationResult } from "../verification/confidence";
 
 export interface LlmRecord {
   provider: string;

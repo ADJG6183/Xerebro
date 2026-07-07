@@ -7,7 +7,7 @@ import {
   PURCHASE_FRESHNESS_WINDOW_SECONDS,
   reconciliationScore,
   verifyHighStakes,
-} from "../src/verification/confidence.js";
+} from "../src/verification/confidence";
 
 describe("verification scoring (docs/verificationEngine.md)", () => {
   it("PROPERTY: all scores stay in [0,1]", () => {

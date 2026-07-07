@@ -3,7 +3,7 @@ import type {
   TransactionEvent,
   TransactionPostedPayload,
   EventSource,
-} from "../src/events.js";
+} from "../src/events";
 
 let counter = 0;
 export function envelope<T extends TransactionEvent["type"], P>(

@@ -6,9 +6,9 @@
  * → byte-identical output, forever. Pure function; no clocks, no randomness,
  * no network. Property-tested in test/decision.test.ts.
  */
-import type { MinorUnits } from "../money.js";
-import { assertMinorUnits, formatMinor } from "../money.js";
-import type { FinancialStateSnapshot } from "../state/financialState.js";
+import type { MinorUnits } from "../money";
+import { assertMinorUnits, formatMinor } from "../money";
+import type { FinancialStateSnapshot } from "../state/financialState";
 
 export const RULES_VERSION = "rules-v0.1.0";
 

@@ -12,8 +12,8 @@
  *  - annotations are an overlay keyed by canonical txnId and survive updates
  *  - updates/annotations for unknown txnIds are recorded as warnings, not errors
  */
-import type { TransactionEvent, TransactionPostedPayload } from "../events.js";
-import { assertMinorUnits } from "../money.js";
+import type { TransactionEvent, TransactionPostedPayload } from "../events";
+import { assertMinorUnits } from "../money";
 
 export interface TransactionRow extends TransactionPostedPayload {
   removed: boolean;

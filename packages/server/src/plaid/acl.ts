@@ -14,9 +14,9 @@
  *    event store makes replays a no-op (docs/SystemInvariants.md).
  */
 import type { MinorUnits } from "@xerebro/engines";
-import type { UnsequencedEvent, EventStore } from "../eventStore.js";
-import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "./gateway.js";
-import type { ItemStore, TxnRegistry } from "./stores.js";
+import type { UnsequencedEvent, EventStore } from "../eventStore";
+import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "./gateway";
+import type { ItemStore, TxnRegistry } from "./stores";
 
 export interface AclDeps {
   plaid: PlaidGateway;

@@ -4,8 +4,8 @@
  * app with fakes at the seams.
  */
 import Fastify, { type FastifyInstance } from "fastify";
-import type { EventStore, UnsequencedEvent } from "./eventStore.js";
-import { syncPlaidItem, type AclDeps } from "./plaid/acl.js";
+import type { EventStore, UnsequencedEvent } from "./eventStore";
+import { syncPlaidItem, type AclDeps } from "./plaid/acl";
 
 /**
  * Plaid webhook authenticity check. MUST be replaced with Plaid's JWT

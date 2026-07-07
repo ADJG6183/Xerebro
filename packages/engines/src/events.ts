@@ -3,7 +3,7 @@
  * The log is append-only; `sequence` is server-assigned and is THE global order.
  * Remaining catalog types (buckets, goals, detectors) arrive with their subsystems.
  */
-import type { MinorUnits } from "./money.js";
+import type { MinorUnits } from "./money";
 
 export type EventSource = "plaid" | "user" | "system" | "detector";
 

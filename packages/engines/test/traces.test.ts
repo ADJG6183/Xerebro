@@ -14,8 +14,8 @@ import {
   PURCHASE_REQUIRED_INPUTS,
   verifyHighStakes,
   type Account,
-} from "../src/index.js";
-import { envelope, posted } from "./helpers.js";
+} from "../src/index";
+import { envelope, posted } from "./helpers";
 
 const checking: Account = {
   accountId: "acc-1",

@@ -15,8 +15,8 @@ import {
   effectiveTransactions,
   type TransactionEvent,
 } from "@xerebro/engines";
-import { syncPlaidItem, toMinorUnits } from "../src/plaid/acl.js";
-import { makeDeps, page, plaidTxn } from "./helpers.js";
+import { syncPlaidItem, toMinorUnits } from "../src/plaid/acl";
+import { makeDeps, page, plaidTxn } from "./helpers";
 
 async function foldUserLog(deps: Awaited<ReturnType<typeof makeDeps>>) {
   const events = (await deps.events.eventsSince("user-1", 0)) as TransactionEvent[];

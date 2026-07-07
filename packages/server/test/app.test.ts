@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildApp } from "../src/app.js";
-import { makeDeps, page, plaidTxn } from "./helpers.js";
+import { buildApp } from "../src/app";
+import { makeDeps, page, plaidTxn } from "./helpers";
 
 describe("HTTP surface (real app, fake seams)", () => {
   it("webhook → drain → events available on the device sync endpoint", async () => {

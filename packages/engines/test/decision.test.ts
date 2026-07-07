@@ -4,7 +4,7 @@ import {
   DEFAULT_PURCHASE_PARAMS,
   decidePurchase,
   RULES_VERSION,
-} from "../src/decision/purchaseApproval.js";
+} from "../src/decision/purchaseApproval";
 
 const arbState = fc.record({
   availableCashMinor: fc.integer({ min: -1_000_000, max: 10_000_000 }),

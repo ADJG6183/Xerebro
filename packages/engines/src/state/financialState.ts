@@ -11,10 +11,10 @@
  * The ledger computation is also what reconciliation compares against the
  * reported balance for plaid accounts (docs/verificationEngine.md).
  */
-import type { MinorUnits } from "../money.js";
-import { assertMinorUnits, sumMinor } from "../money.js";
-import type { TransactionProjection } from "../projection/transactions.js";
-import { effectiveTransactions } from "../projection/transactions.js";
+import type { MinorUnits } from "../money";
+import { assertMinorUnits, sumMinor } from "../money";
+import type { TransactionProjection } from "../projection/transactions";
+import { effectiveTransactions } from "../projection/transactions";
 
 export type AccountType = "checking" | "savings" | "cash" | "credit" | "loan" | "investment";
 

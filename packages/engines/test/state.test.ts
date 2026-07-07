@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { applyEvents, emptyProjection } from "../src/projection/transactions.js";
-import { computeFinancialState, type Account } from "../src/state/financialState.js";
-import { posted } from "./helpers.js";
+import { applyEvents, emptyProjection } from "../src/projection/transactions";
+import { computeFinancialState, type Account } from "../src/state/financialState";
+import { posted } from "./helpers";
 
 const manual = (opening: number): Account => ({
   accountId: "acc-1",

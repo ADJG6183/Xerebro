@@ -1,8 +1,8 @@
-import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "../src/plaid/gateway.js";
-import { InMemoryEventStore } from "../src/eventStore.js";
-import { InMemoryItemStore, InMemoryTxnRegistry } from "../src/plaid/stores.js";
-import type { AppDeps } from "../src/app.js";
-import { DEV_TRUST_ALL_VERIFIER } from "../src/app.js";
+import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "../src/plaid/gateway";
+import { InMemoryEventStore } from "../src/eventStore";
+import { InMemoryItemStore, InMemoryTxnRegistry } from "../src/plaid/stores";
+import type { AppDeps } from "../src/app";
+import { DEV_TRUST_ALL_VERIFIER } from "../src/app";
 
 export function plaidTxn(overrides: Partial<PlaidTransaction> & { transaction_id: string }): PlaidTransaction {
   return {

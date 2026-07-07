@@ -5,8 +5,8 @@ import {
   applyEvents,
   effectiveTransactions,
   emptyProjection,
-} from "../src/projection/transactions.js";
-import { arbEventLog, envelope, posted, projectionToPlain } from "./helpers.js";
+} from "../src/projection/transactions";
+import { arbEventLog, envelope, posted, projectionToPlain } from "./helpers";
 
 describe("transaction fold (ADR-003 reference implementation)", () => {
   it("PROPERTY: folding the same log twice yields identical projections", () => {
