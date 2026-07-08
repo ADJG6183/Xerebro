@@ -3,3 +3,7 @@ dist/
 .expo/
 *.log
 .DS_Store
+
+# Secrets — never committed (SecurityPrivacy.md)
+.env
+.env.local

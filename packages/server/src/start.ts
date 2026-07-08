@@ -4,13 +4,32 @@
  * NOT for deployment: in-memory log, trust-all webhook verifier.
  */
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildApp, DEV_TRUST_ALL_VERIFIER } from "./app";
 import { InMemoryEventStore } from "./eventStore";
 import { openAiGateway } from "./llm/gateway";
 import { InMemoryItemStore, InMemoryTxnRegistry } from "./plaid/stores";
 
-// Set OPENAI_API_KEY and OPENAI_MODEL to enable AI explanations; without
-// them the app keeps its template explanations (graceful, by design).
+/**
+ * Dev-only .env loader (packages/server/.env, gitignored — see .env.example).
+ * Real env vars win over the file. Deployed environments won't use this:
+ * secrets there come from a managed store (docs/SecurityPrivacy.md).
+ */
+function loadDotEnv(): void {
+  const path = join(import.meta.dirname, "..", ".env");
+  if (!existsSync(path)) return;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (match && process.env[match[1]!] === undefined) {
+      process.env[match[1]!] = match[2]!.replace(/^["']|["']$/g, "");
+    }
+  }
+}
+loadDotEnv();
+
+// Set OPENAI_API_KEY and OPENAI_MODEL (env or packages/server/.env) to enable
+// AI explanations; without them the app keeps its template explanations.
 const llm =
   process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL
     ? openAiGateway({ apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL })

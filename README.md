@@ -24,7 +24,9 @@ Run the app against the dev server:
 npm run dev -w @xerebro/server
 
 # optional: enable AI explanations (otherwise template explanations are used)
-OPENAI_API_KEY=sk-... OPENAI_MODEL=<model> npm run dev -w @xerebro/server
+# one-time setup: cp packages/server/.env.example packages/server/.env
+# then fill in OPENAI_API_KEY and OPENAI_MODEL — the dev server reads it on start
+# (.env is gitignored; never commit keys)
 
 # terminal 2 — Expo
 npm start -w @xerebro/app
