@@ -29,5 +29,19 @@ export function httpTransport(baseUrl: string): SyncTransport {
       });
       if (!res.ok) throw new Error(`refresh failed: HTTP ${res.status}`);
     },
+    async getExplanation(request) {
+      const res = await fetch(`${baseUrl}/explanations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      if (!res.ok) throw new Error(`explanation failed: HTTP ${res.status}`);
+      return (await res.json()) as {
+        text: string;
+        provider: string;
+        model: string;
+        promptTemplateVersion: string;
+      };
+    },
   };
 }

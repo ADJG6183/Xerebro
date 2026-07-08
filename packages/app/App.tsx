@@ -11,9 +11,11 @@ import { StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./src/data/apiUrl";
 import { buildDashboardViewModel, type DashboardViewModel } from "./src/data/dashboardModel";
 import {
+  enhanceExplanation,
   runPurchaseCheck,
   submitFeedback,
   type DecisionFlowDeps,
+  type EnhancedExplanation,
   type PurchaseCheckResult,
 } from "./src/data/decisionFlow";
 import type { DeviceEventLog } from "./src/data/deviceLog";
@@ -49,6 +51,7 @@ export default function App() {
   const [descriptionText, setDescriptionText] = useState("");
   const [checking, setChecking] = useState(false);
   const [answer, setAnswer] = useState<PurchaseCheckResult | null>(null);
+  const [enhanced, setEnhanced] = useState<EnhancedExplanation | null>(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
 
   const rebuild = useCallback(async (deviceLog: DeviceEventLog) => {
@@ -102,15 +105,22 @@ export default function App() {
     if (!deps || !Number.isSafeInteger(amountMinor) || amountMinor <= 0) return;
     setChecking(true);
     setFeedbackSent(false);
+    setEnhanced(null);
+    let result: PurchaseCheckResult | null = null;
     try {
       const description = descriptionText.trim() || undefined;
-      const result = await runPurchaseCheck(deps, amountMinor, description);
-      setAnswer(result);
+      result = await runPurchaseCheck(deps, amountMinor, description);
+      setAnswer(result); // beat 1: verdict + template, instantly
       setOffline(result.offline);
     } finally {
       setChecking(false);
     }
     if (log) await rebuild(log);
+    if (result) {
+      // beat 2: richer prose arrives when it arrives; template stands otherwise
+      const better = await enhanceExplanation(deps, result.record);
+      if (better) setEnhanced(better);
+    }
   }, [flowDeps, amountText, descriptionText, log, rebuild]);
 
   const onFeedback = useCallback(
@@ -199,6 +209,7 @@ export default function App() {
             onCheck={onCheck}
             onBack={() => setAsking(false)}
             answer={answer}
+            enhanced={enhanced}
             feedbackSent={feedbackSent}
             onFeedback={onFeedback}
           />

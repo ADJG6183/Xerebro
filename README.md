@@ -23,6 +23,9 @@ Run the app against the dev server:
 # terminal 1 — API on :3000 (in-memory, resets on restart)
 npm run dev -w @xerebro/server
 
+# optional: enable AI explanations (otherwise template explanations are used)
+OPENAI_API_KEY=sk-... OPENAI_MODEL=<model> npm run dev -w @xerebro/server
+
 # terminal 2 — Expo
 npm start -w @xerebro/app
 ```

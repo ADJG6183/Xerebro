@@ -15,6 +15,14 @@ export interface SyncTransport {
   /** On-demand aggregator refresh (verification refresh-race). Optional:
    * absent means the deployment has no aggregator (manual-only). */
   refreshItem?(itemId: string): Promise<void>;
+  /** LLM explanation via the server proxy. Optional: absent or failing means
+   * the template explanation stands (docs/AIArchitecture.md fallback). */
+  getExplanation?(request: unknown): Promise<{
+    text: string;
+    provider: string;
+    model: string;
+    promptTemplateVersion: string;
+  }>;
 }
 
 export interface PullResult {

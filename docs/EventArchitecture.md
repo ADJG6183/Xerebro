@@ -10,7 +10,9 @@ Every event carries: `event_id`, server-assigned `sequence` (the global order, g
 
 **Aggregator (via Plaid ACL):** `TransactionPosted` · `TransactionUpdated` · `TransactionRemoved` · `BankConnected` · `BankDisconnected` · `SyncCompleted` · `SyncFailed`
 
-**User:** `AccountUpserted` (manual accounts) · `BucketUpserted` · `BillUpserted` · `GoalCreated` · `TransactionAnnotated` · `RecommendationRecorded` · `FeedbackSubmitted` · `VoiceFactConfirmed` (post-v1)
+**User:** `AccountUpserted` (manual accounts) · `BucketUpserted` · `BillUpserted` · `GoalCreated` · `TransactionAnnotated` · `RecommendationRecorded` · `RecommendationExplanationAdded` · `FeedbackSubmitted` · `VoiceFactConfirmed` (post-v1)
+
+`RecommendationExplanationAdded` is an append-only *amendment*: the audit record ships at verdict time (with the template explanation); when the LLM explanation arrives seconds later and passes the faithfulness check, it is appended under the same `recommendationId` rather than editing the shipped record. Reconstruction = record + its amendments.
 
 Manual transactions are ordinary `TransactionPosted` events with `source: "user"` — one event type per fact, distinguished by provenance, so the fold has a single code path. (`AccountUpserted` with `source: "plaid"` will carry aggregator account metadata/balances when balance sync lands.) Buckets and bills follow the same upsert-style convention as accounts: one event type, last-write-by-sequence wins per id.
 

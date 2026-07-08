@@ -17,7 +17,12 @@ import type { EventEnvelope } from "@xerebro/engines";
 import { InMemoryDeviceLog } from "../src/data/deviceLog";
 import type { SyncTransport } from "../src/data/syncClient";
 import { pushUserEvents } from "../src/data/syncClient";
-import { runPurchaseCheck, submitFeedback, type DecisionFlowDeps } from "../src/data/decisionFlow";
+import {
+  enhanceExplanation,
+  runPurchaseCheck,
+  submitFeedback,
+  type DecisionFlowDeps,
+} from "../src/data/decisionFlow";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "../src/data/userEvents";
 
 const NOW = "2026-07-07T10:00:00.000Z";
@@ -250,6 +255,75 @@ describe("runPurchaseCheck", () => {
       recommendationId: result.record.recommendationId,
       response: "accepted",
     });
+  });
+
+  it("beat 2: faithful LLM text upgrades the prose and lands an amendment event", async () => {
+    const { app, deps } = makeServer();
+    const base = injectTransport(app);
+    const transport: SyncTransport = {
+      ...base,
+      async getExplanation() {
+        return {
+          text: "Yes — the flight at $600.00 fits your plans comfortably.",
+          provider: "openai",
+          model: "test-model",
+          promptTemplateVersion: "tmpl-v1",
+        };
+      },
+    };
+    const flow = makeFlow(transport);
+    await seedManualAccount(flow);
+
+    const result = await runPurchaseCheck(flow, 60_000, "flight");
+    const better = await enhanceExplanation(flow, result.record);
+
+    expect(better?.text).toContain("fits your plans");
+    const events = await deps.events.eventsSince("user-1", 0);
+    const amendment = events.find((e) => e.type === "RecommendationExplanationAdded");
+    expect(amendment?.payload).toMatchObject({
+      recommendationId: result.record.recommendationId,
+      llm: { provider: "openai", explanationTextVerbatim: better!.text },
+    });
+  });
+
+  it("beat 2: unfaithful LLM text is rejected ON DEVICE — no upgrade, no amendment", async () => {
+    const { app, deps } = makeServer();
+    const base = injectTransport(app);
+    const transport: SyncTransport = {
+      ...base,
+      async getExplanation() {
+        return {
+          text: "Yes — $600.00 is fine; similar flights cost $89.99 on Tuesdays.",
+          provider: "openai",
+          model: "test-model",
+          promptTemplateVersion: "tmpl-v1",
+        };
+      },
+    };
+    const flow = makeFlow(transport);
+    await seedManualAccount(flow);
+
+    const result = await runPurchaseCheck(flow, 60_000, "flight");
+    expect(await enhanceExplanation(flow, result.record)).toBeNull();
+
+    const events = await deps.events.eventsSince("user-1", 0);
+    expect(events.find((e) => e.type === "RecommendationExplanationAdded")).toBeUndefined();
+  });
+
+  it("beat 2: proxy absent or failing → null; the template stands", async () => {
+    const { app } = makeServer();
+    const flow = makeFlow(injectTransport(app)); // no getExplanation on transport
+    await seedManualAccount(flow);
+    const result = await runPurchaseCheck(flow, 60_000);
+    expect(await enhanceExplanation(flow, result.record)).toBeNull();
+
+    const failing = makeFlow({
+      ...injectTransport(app),
+      getExplanation: async () => {
+        throw new Error("503");
+      },
+    });
+    expect(await enhanceExplanation(failing, result.record)).toBeNull();
   });
 
   it("decline path: buffer math shows in the explanation", async () => {

@@ -5,6 +5,12 @@
  */
 import Fastify, { type FastifyInstance } from "fastify";
 import type { EventStore, UnsequencedEvent } from "./eventStore";
+import {
+  explainDecision,
+  UnfaithfulExplanationError,
+  type ExplainRequest,
+} from "./llm/explain";
+import type { LlmGateway } from "./llm/gateway";
 import { syncPlaidItem, type AclDeps } from "./plaid/acl";
 
 /**
@@ -24,6 +30,9 @@ export const DEV_TRUST_ALL_VERIFIER: WebhookVerifier = {
 
 export interface AppDeps extends AclDeps {
   webhookVerifier: WebhookVerifier;
+  /** Absent = no provider configured; /explanations returns 503 and clients
+   * keep their template explanations (docs/AIArchitecture.md fallback). */
+  llm?: LlmGateway;
 }
 
 interface PlaidWebhookBody {
@@ -75,6 +84,29 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return reply.send(outcome);
     } catch {
       return reply.code(502).send({ error: "aggregator refresh failed" });
+    }
+  });
+
+  /**
+   * LLM explanation proxy — the ONLY path to a model provider
+   * (docs/SecurityPrivacy.md). The prompt is built exclusively from fields
+   * PICKED inside explainDecision; anything extra in the body never reaches
+   * the model. Unfaithful output is discarded (422) — clients keep the
+   * template.
+   */
+  app.post<{ Body: ExplainRequest }>("/explanations", async (request, reply) => {
+    if (!deps.llm) return reply.code(503).send({ error: "no LLM provider configured" });
+    const { decision, verification } = request.body ?? {};
+    if (!decision?.inputsSnapshot || !decision.decision || !verification?.status) {
+      return reply.code(400).send({ error: "decision and verification required" });
+    }
+    try {
+      return reply.send(await explainDecision(deps.llm, { decision, verification }));
+    } catch (err) {
+      if (err instanceof UnfaithfulExplanationError) {
+        return reply.code(422).send({ error: "unfaithful explanation discarded", violations: err.violations });
+      }
+      return reply.code(502).send({ error: "explanation provider failed" });
     }
   });
 

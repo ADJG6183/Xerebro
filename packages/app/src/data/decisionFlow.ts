@@ -17,6 +17,7 @@
  */
 import {
   buildRecommendationRecord,
+  checkFaithfulness,
   computeFinancialState,
   decidePurchase,
   emptyProjection,
@@ -135,6 +136,54 @@ export async function runPurchaseCheck(
     offline,
     recordPersisted,
   };
+}
+
+export interface EnhancedExplanation {
+  text: string;
+  provider: string;
+  model: string;
+}
+
+/**
+ * Beat 2 (docs/AIArchitecture.md two-beat delivery): ask the proxy for the
+ * LLM explanation. On success: re-check faithfulness ON DEVICE (defense in
+ * depth — the client doesn't have to trust the server's diligence), push a
+ * RecommendationExplanationAdded amendment, and hand the richer text to the
+ * UI. On ANY failure — proxy absent, network, 422/503, unfaithful — return
+ * null and the template explanation simply stands.
+ */
+export async function enhanceExplanation(
+  deps: DecisionFlowDeps,
+  record: RecommendationRecord,
+): Promise<EnhancedExplanation | null> {
+  if (deps.transport.getExplanation === undefined) return null;
+  try {
+    const res = await deps.transport.getExplanation({
+      decision: record.decision,
+      verification: record.verification,
+    });
+    if (!checkFaithfulness(res.text, record.decision).faithful) return null;
+
+    await pushUserEvents(deps.transport, deps.log, deps.userId, [
+      makeUserEvent(
+        deps.factory,
+        "RecommendationExplanationAdded",
+        {
+          recommendationId: record.recommendationId,
+          llm: {
+            provider: res.provider,
+            model: res.model,
+            promptTemplateVersion: res.promptTemplateVersion,
+            explanationTextVerbatim: res.text,
+          },
+        },
+        `rec-explain:${record.recommendationId}`,
+      ),
+    ]);
+    return { text: res.text, provider: res.provider, model: res.model };
+  } catch {
+    return null;
+  }
 }
 
 export async function submitFeedback(

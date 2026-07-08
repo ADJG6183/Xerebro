@@ -35,6 +35,8 @@ Response                    (decision + explanation + data age + "why" inspector
 - Every number in the explanation must come from the decision payload. The renderer substitutes numeric placeholders from the payload (`{available_cash}`) rather than trusting model-typed digits — the model cannot introduce a number that isn't in the input.
 - Output is stored verbatim in the audit record; explanations are never regenerated (SystemInvariants.md).
 - Fallback: if the LLM is unavailable, ship the deterministic recommendation with a template explanation. AI failure never blocks a verified decision (Reliability.md).
+- **Runtime faithfulness check** at the proxy, on every response: (1) every money figure in the text must exist in the legal set derived from the decision payload; (2) the text must not contradict the verdict (a decline may never read as an approval). A failing response is discarded and the template ships instead. This is mechanical and per-call — distinct from the offline eval harness below.
+- Two-beat delivery: the verdict + template render immediately; the LLM explanation replaces the prose when it arrives and is audited via a `RecommendationExplanationAdded` amendment event (EventArchitecture.md).
 - Faithfulness eval harness (does the explanation accurately restate the decision?) gates launch and provider/model changes (ADR-002).
 
 ## Voice (deferred feature; contract set now)

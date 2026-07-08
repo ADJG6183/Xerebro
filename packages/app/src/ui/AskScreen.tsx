@@ -6,7 +6,7 @@
  */
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import type { PurchaseCheckResult } from "../data/decisionFlow";
+import type { EnhancedExplanation, PurchaseCheckResult } from "../data/decisionFlow";
 import { theme } from "./theme";
 
 const VERDICT: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
@@ -24,6 +24,7 @@ export function AskScreen(props: {
   onCheck: () => void;
   onBack: () => void;
   answer: PurchaseCheckResult | null;
+  enhanced: EnhancedExplanation | null;
   feedbackSent: boolean;
   onFeedback: (r: "accepted" | "ignored") => void;
 }) {
@@ -81,7 +82,13 @@ export function AskScreen(props: {
             <Ionicons name={verdict.icon} size={26} color={verdict.color} />
             <Text style={[styles.verdict, { color: verdict.color }]}>{verdict.label}</Text>
           </View>
-          <Text style={styles.explanation}>{answer.explanation}</Text>
+          <Text style={styles.explanation}>{props.enhanced?.text ?? answer.explanation}</Text>
+          {props.enhanced && (
+            <View style={styles.aiTag}>
+              <Ionicons name="sparkles" size={11} color={theme.primaryDeep} />
+              <Text style={styles.aiTagText}>AI explanation · verified against the decision</Text>
+            </View>
+          )}
 
           <View style={styles.metaCard}>
             <Text style={styles.metaLine}>
@@ -168,6 +175,8 @@ const styles = StyleSheet.create({
   verdictRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   verdict: { fontSize: 18, fontWeight: "800" },
   explanation: { fontSize: 15, color: theme.ink, lineHeight: 22 },
+  aiTag: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 8 },
+  aiTagText: { fontSize: 11, color: theme.primaryDeep },
   metaCard: {
     backgroundColor: theme.bg,
     borderRadius: 10,

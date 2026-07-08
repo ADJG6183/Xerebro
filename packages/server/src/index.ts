@@ -3,3 +3,5 @@ export * from "./plaid/gateway";
 export * from "./plaid/stores";
 export * from "./plaid/acl";
 export * from "./app";
+export * from "./llm/gateway";
+export * from "./llm/explain";
