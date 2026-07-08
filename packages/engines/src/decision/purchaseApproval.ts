@@ -54,6 +54,10 @@ export interface PurchaseDecision {
     availableCashMinor: MinorUnits;
     upcomingObligationsMinor: MinorUnits;
     bufferFloorMinor: MinorUnits;
+    /** User-supplied product context. Explanation-layer input ONLY — no rule
+     * reads it (rules decide on numbers; docs/decisionEngine.md). Kept in the
+     * snapshot so the audit record preserves what the user asked about. */
+    description?: string;
   };
   rulesVersion: string;
   paramsVersion: string;
@@ -66,6 +70,7 @@ export function decidePurchase(
 ): PurchaseDecision {
   const amount = assertMinorUnits(question.amountMinor, "purchase amount");
   if (amount <= 0) throw new RangeError("purchase amount must be positive minor units");
+  const description = question.description?.trim().slice(0, 120) || undefined;
 
   const { availableCashMinor, upcomingObligationsMinor } = state;
   const { bufferFloorMinor } = params;
@@ -119,6 +124,7 @@ export function decidePurchase(
       availableCashMinor,
       upcomingObligationsMinor,
       bufferFloorMinor,
+      ...(description !== undefined ? { description } : {}),
     },
     rulesVersion: RULES_VERSION,
     paramsVersion: params.paramsVersion,

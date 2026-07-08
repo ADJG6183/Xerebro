@@ -46,6 +46,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("home");
   const [asking, setAsking] = useState(false);
   const [amountText, setAmountText] = useState("");
+  const [descriptionText, setDescriptionText] = useState("");
   const [checking, setChecking] = useState(false);
   const [answer, setAnswer] = useState<PurchaseCheckResult | null>(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
@@ -102,14 +103,15 @@ export default function App() {
     setChecking(true);
     setFeedbackSent(false);
     try {
-      const result = await runPurchaseCheck(deps, amountMinor);
+      const description = descriptionText.trim() || undefined;
+      const result = await runPurchaseCheck(deps, amountMinor, description);
       setAnswer(result);
       setOffline(result.offline);
     } finally {
       setChecking(false);
     }
     if (log) await rebuild(log);
-  }, [flowDeps, amountText, log, rebuild]);
+  }, [flowDeps, amountText, descriptionText, log, rebuild]);
 
   const onFeedback = useCallback(
     async (response: "accepted" | "ignored") => {
@@ -191,6 +193,8 @@ export default function App() {
           <AskScreen
             amountText={amountText}
             onAmountText={setAmountText}
+            descriptionText={descriptionText}
+            onDescriptionText={setDescriptionText}
             checking={checking}
             onCheck={onCheck}
             onBack={() => setAsking(false)}

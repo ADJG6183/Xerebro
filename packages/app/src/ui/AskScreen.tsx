@@ -18,6 +18,8 @@ const VERDICT: Record<string, { label: string; color: string; icon: keyof typeof
 export function AskScreen(props: {
   amountText: string;
   onAmountText: (t: string) => void;
+  descriptionText: string;
+  onDescriptionText: (t: string) => void;
   checking: boolean;
   onCheck: () => void;
   onBack: () => void;
@@ -58,6 +60,19 @@ export function AskScreen(props: {
         <Pressable style={styles.checkBtn} onPress={props.onCheck} disabled={props.checking}>
           <Text style={styles.checkText}>{props.checking ? "Checking…" : "Check"}</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.descCard}>
+        <Ionicons name="pricetag-outline" size={16} color={theme.faint} />
+        <TextInput
+          style={styles.descInput}
+          value={props.descriptionText}
+          onChangeText={props.onDescriptionText}
+          placeholder="What is it? (optional — e.g. espresso machine)"
+          placeholderTextColor={theme.faint}
+          editable={!props.checking}
+          maxLength={120}
+        />
       </View>
 
       {answer && verdict && decision && verification && (
@@ -137,6 +152,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   checkText: { color: theme.onPrimary, fontWeight: "700" },
+  descCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: theme.card,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginTop: -6,
+    marginBottom: 16,
+  },
+  descInput: { flex: 1, fontSize: 14, color: theme.ink, paddingVertical: 2 },
   answerCard: { backgroundColor: theme.card, borderRadius: 16, padding: 18 },
   verdictRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   verdict: { fontSize: 18, fontWeight: "800" },

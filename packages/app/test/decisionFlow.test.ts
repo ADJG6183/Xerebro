@@ -106,7 +106,8 @@ describe("runPurchaseCheck", () => {
     expect(result.record.verification.status).toBe("VERIFIED");
     expect(result.record.decision.decision).toBe("approve");
     expect(result.manualDataOnly).toBe(true);
-    expect(result.explanation).toMatch(/^Yes — you can afford \$600\.00/);
+    expect(result.explanation).toMatch(/^Yes — you can afford the flight \(\$600\.00\)/);
+    expect(result.record.decision.inputsSnapshot.description).toBe("flight"); // audit keeps the context
     expect(result.recordPersisted).toBe(true);
 
     // The audit record reached the server log, reconstructable by retrieval.

@@ -15,16 +15,20 @@ const VERIFIED: VerificationResult = {
 };
 
 describe("template explanation (docs/AIArchitecture.md substitution rule)", () => {
-  it("PROPERTY: every dollar figure in the text comes from the decision payload", () => {
+  it("PROPERTY: every dollar figure in the text comes from the decision payload — even when the user-typed description contains money strings", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 0, max: 5_000_000 }),
         fc.integer({ min: 0, max: 1_000_000 }),
         fc.integer({ min: 1, max: 2_000_000 }),
-        (cash, obligations, amount) => {
+        fc.option(
+          fc.oneof(fc.string(), fc.constant("$999.99 designer shoes"), fc.constant("tickets, 250 dollars each")),
+          { nil: undefined },
+        ),
+        (cash, obligations, amount, description) => {
           const decision = decidePurchase(
             { availableCashMinor: cash, upcomingObligationsMinor: obligations },
-            { amountMinor: amount },
+            { amountMinor: amount, ...(description !== undefined ? { description } : {}) },
           );
           const text = renderTemplateExplanation(decision, VERIFIED);
           const s = decision.inputsSnapshot;
@@ -47,6 +51,29 @@ describe("template explanation (docs/AIArchitecture.md substitution rule)", () =
         },
       ),
     );
+  });
+
+  it("mentions the product when a description is given", () => {
+    const decision = decidePurchase(
+      { availableCashMinor: 500_000, upcomingObligationsMinor: 0 },
+      { amountMinor: 60_000, description: "espresso machine" },
+    );
+    const text = renderTemplateExplanation(decision, VERIFIED);
+    expect(text).toContain("the espresso machine ($600.00)");
+    expect(decision.inputsSnapshot.description).toBe("espresso machine"); // audit keeps it
+  });
+
+  it("strips money figures from user-typed descriptions (injection guard)", () => {
+    const decision = decidePurchase(
+      { availableCashMinor: 500_000, upcomingObligationsMinor: 0 },
+      { amountMinor: 60_000, description: "$999.99 designer shoes" },
+    );
+    const text = renderTemplateExplanation(decision, VERIFIED);
+    expect(text).not.toContain("999.99");
+    expect(text).toContain("the designer shoes ($600.00)");
+    // The RAW description is preserved in the audit snapshot — sanitizing is
+    // a rendering rule, not a data rule.
+    expect(decision.inputsSnapshot.description).toBe("$999.99 designer shoes");
   });
 
   it("approve / caution / decline each produce a decision-consistent sentence", () => {
