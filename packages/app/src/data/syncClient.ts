@@ -12,6 +12,9 @@ export interface SyncTransport {
     since: number,
   ): Promise<{ events: EventEnvelope[]; lastSequence: number }>;
   postEvents(userId: string, events: readonly Omit<EventEnvelope, "sequence">[]): Promise<void>;
+  /** On-demand aggregator refresh (verification refresh-race). Optional:
+   * absent means the deployment has no aggregator (manual-only). */
+  refreshItem?(itemId: string): Promise<void>;
 }
 
 export interface PullResult {

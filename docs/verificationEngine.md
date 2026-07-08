@@ -21,6 +21,8 @@ Verification is **tiered by stakes**. Every request carries a `decision_class`:
 
 `read_only` freshness: label thresholds at 24h ("as of yesterday") and 72h (prominent stale warning + reconnect prompt).
 
+**Manual accounts are exempt from the aggregator freshness window.** Freshness measures how far behind the *bank feed* we might be; a manual account has no feed — the user's own entries are its truth. State computed only from manual accounts scores freshness 1.0 and is labeled "based on your manually entered data". When state mixes manual and aggregator accounts, the aggregator accounts' age governs the window.
+
 ## Confidence — defined
 
 Confidence is a **data-quality score computed by verification**, not a model probability:

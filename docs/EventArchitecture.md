@@ -10,9 +10,11 @@ Every event carries: `event_id`, server-assigned `sequence` (the global order, g
 
 **Aggregator (via Plaid ACL):** `TransactionPosted` · `TransactionUpdated` · `TransactionRemoved` · `BankConnected` · `BankDisconnected` · `SyncCompleted` · `SyncFailed`
 
-**User:** `AccountUpserted` (manual accounts) · `BucketCreated` · `BucketUpdated` · `GoalCreated` · `TransactionAnnotated` · `FeedbackSubmitted` · `VoiceFactConfirmed` (post-v1)
+**User:** `AccountUpserted` (manual accounts) · `BucketUpserted` · `BillUpserted` · `GoalCreated` · `TransactionAnnotated` · `RecommendationRecorded` · `FeedbackSubmitted` · `VoiceFactConfirmed` (post-v1)
 
-Manual transactions are ordinary `TransactionPosted` events with `source: "user"` — one event type per fact, distinguished by provenance, so the fold has a single code path. (`AccountUpserted` with `source: "plaid"` will carry aggregator account metadata/balances when balance sync lands.)
+Manual transactions are ordinary `TransactionPosted` events with `source: "user"` — one event type per fact, distinguished by provenance, so the fold has a single code path. (`AccountUpserted` with `source: "plaid"` will carry aggregator account metadata/balances when balance sync lands.) Buckets and bills follow the same upsert-style convention as accounts: one event type, last-write-by-sequence wins per id.
+
+**Provenance rule for device uploads:** the server accepts only `source: "user"` from devices — a client may never claim to be the aggregator or a server detector. `RecommendationRecorded` and `FeedbackSubmitted` are classified as user events even though the device's engine assembles them: both exist only because the user asked a question or responded to an answer, and the audit record they carry is the user-facing artifact (DataModel.md). Rationale: a compromised client that could push `source: "system"` events could forge detector output; keeping the device's vocabulary user-only contains that blast radius.
 
 **Detectors (derived from state — see below):** `PaycheckReceived` · `GoalCompleted` · `OverspendingDetected` · `BillDueSoon`
 

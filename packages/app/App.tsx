@@ -1,26 +1,32 @@
 /**
- * Home screen (docs/V1Scope.md dashboard): renders ONLY from the local
- * device log — the local-first invariant, visible. Sync happens in the
- * background; if the server is unreachable the screen still renders from
- * whatever is stored, labeled with its data age.
+ * Shell: wires data (device log, sync, decision flow) to the mockup-faithful
+ * screens (docs/uiDesign/image2.png). No navigation library yet — a tab enum
+ * covers four tabs + one modal-style flow; a nav dependency earns its place
+ * when deep-linking or real stacks arrive. The UI stays a dumb painter:
+ * every number and sentence comes from tested modules.
  */
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useState } from "react";
-import {
-  FlatList,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { resolveApiUrl } from "./src/data/apiUrl";
 import { buildDashboardViewModel, type DashboardViewModel } from "./src/data/dashboardModel";
+import {
+  runPurchaseCheck,
+  submitFeedback,
+  type DecisionFlowDeps,
+  type PurchaseCheckResult,
+} from "./src/data/decisionFlow";
 import type { DeviceEventLog } from "./src/data/deviceLog";
 import { httpTransport } from "./src/data/httpTransport";
 import { openDeviceLog } from "./src/data/openDeviceLog";
-import { pullOnce, pushUserEvents, type SyncTransport } from "./src/data/syncClient";
+import { pullOnce, pushUserEvents } from "./src/data/syncClient";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "./src/data/userEvents";
+import { AskScreen } from "./src/ui/AskScreen";
+import { HomeScreen } from "./src/ui/HomeScreen";
+import { PlaceholderScreen } from "./src/ui/PlaceholderScreen";
+import { TabBar, type Tab } from "./src/ui/TabBar";
+import { theme } from "./src/ui/theme";
+import { TransactionsScreen } from "./src/ui/TransactionsScreen";
 
 const USER_ID = "user-1"; // real auth arrives with the security milestone
 const API_URL = resolveApiUrl();
@@ -33,10 +39,16 @@ const factoryDeps: EventFactoryDeps = {
 
 export default function App() {
   const [log, setLog] = useState<DeviceEventLog | null>(null);
-  const [transport] = useState<SyncTransport>(() => httpTransport(API_URL));
+  const [transport] = useState(() => httpTransport(API_URL));
   const [vm, setVm] = useState<DashboardViewModel | null>(null);
   const [offline, setOffline] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<Tab>("home");
+  const [asking, setAsking] = useState(false);
+  const [amountText, setAmountText] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [answer, setAnswer] = useState<PurchaseCheckResult | null>(null);
+  const [feedbackSent, setFeedbackSent] = useState(false);
 
   const rebuild = useCallback(async (deviceLog: DeviceEventLog) => {
     const events = await deviceLog.all();
@@ -69,13 +81,45 @@ export default function App() {
       const deviceLog = await openDeviceLog();
       if (cancelled) return;
       setLog(deviceLog);
-      await rebuild(deviceLog); // paint from cache FIRST
+      await rebuild(deviceLog); // cache paints first
       await sync(deviceLog); // network never blocks first paint
     })();
     return () => {
       cancelled = true;
     };
   }, [rebuild, sync]);
+
+  const flowDeps = useCallback((): DecisionFlowDeps | null => {
+    if (!log) return null;
+    return { log, transport, factory: factoryDeps, userId: USER_ID };
+  }, [log, transport]);
+
+  const onCheck = useCallback(async () => {
+    const deps = flowDeps();
+    // UI boundary: dollars text → integer cents immediately; the float dies here.
+    const amountMinor = Math.round(Number.parseFloat(amountText) * 100);
+    if (!deps || !Number.isSafeInteger(amountMinor) || amountMinor <= 0) return;
+    setChecking(true);
+    setFeedbackSent(false);
+    try {
+      const result = await runPurchaseCheck(deps, amountMinor);
+      setAnswer(result);
+      setOffline(result.offline);
+    } finally {
+      setChecking(false);
+    }
+    if (log) await rebuild(log);
+  }, [flowDeps, amountText, log, rebuild]);
+
+  const onFeedback = useCallback(
+    async (response: "accepted" | "ignored") => {
+      const deps = flowDeps();
+      if (!deps || !answer) return;
+      await submitFeedback(deps, answer.record.recommendationId, response);
+      setFeedbackSent(true);
+    },
+    [flowDeps, answer],
+  );
 
   const addDemoAccount = useCallback(async () => {
     if (!log) return;
@@ -133,78 +177,67 @@ export default function App() {
 
   if (!vm) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.muted}>First sync…</Text>
+      <View style={styles.loading}>
+        <Text style={styles.loadingText}>First sync…</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.root}>
       <StatusBar style="auto" />
-      <Text style={styles.greeting}>Good morning 👋</Text>
-      {offline && <Text style={styles.offline}>Offline — showing saved data</Text>}
-
-      <View style={styles.balanceCard}>
-        <Text style={styles.balanceLabel}>Available Cash</Text>
-        <Text style={styles.balanceValue}>{vm.availableCashFormatted}</Text>
-        <Text style={styles.balanceAge}>{vm.dataAgeLabel}</Text>
+      <View style={styles.body}>
+        {asking ? (
+          <AskScreen
+            amountText={amountText}
+            onAmountText={setAmountText}
+            checking={checking}
+            onCheck={onCheck}
+            onBack={() => setAsking(false)}
+            answer={answer}
+            feedbackSent={feedbackSent}
+            onFeedback={onFeedback}
+          />
+        ) : tab === "home" ? (
+          <HomeScreen
+            vm={vm}
+            offline={offline}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            onSeeAll={() => setTab("transactions")}
+            onAddDemo={addDemoAccount}
+          />
+        ) : tab === "transactions" ? (
+          <TransactionsScreen vm={vm} />
+        ) : tab === "budget" ? (
+          <PlaceholderScreen
+            title="Budget"
+            note="Buckets and paycheck planning arrive in a later milestone — designed in docs/V1Scope.md, not yet built."
+          />
+        ) : (
+          <PlaceholderScreen
+            title="Reports"
+            note="Spending reports arrive after the budget milestone. Nothing here will ever be estimated silently."
+          />
+        )}
       </View>
-
-      {vm.hasAccounts ? (
-        <FlatList
-          style={styles.list}
-          data={vm.recentTransactions}
-          keyExtractor={(t) => t.txnId}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          ListHeaderComponent={<Text style={styles.sectionTitle}>Recent Transactions</Text>}
-          renderItem={({ item }) => (
-            <View style={styles.txnRow}>
-              <View style={styles.txnLeft}>
-                <Text style={styles.txnMerchant}>
-                  {item.merchant}
-                  {item.pending ? "  (pending)" : ""}
-                </Text>
-                {item.category ? <Text style={styles.muted}>{item.category}</Text> : null}
-              </View>
-              <Text style={[styles.txnAmount, item.isInflow ? styles.inflow : styles.outflow]}>
-                {item.amountFormatted}
-              </Text>
-            </View>
-          )}
+      {!asking && (
+        <TabBar
+          active={tab}
+          onTab={(t) => {
+            setTab(t);
+            setAsking(false);
+          }}
+          onAsk={() => setAsking(true)}
         />
-      ) : (
-        <Pressable style={styles.cta} onPress={addDemoAccount}>
-          <Text style={styles.ctaText}>Add demo checking account</Text>
-        </Pressable>
       )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f3faf6", paddingTop: 72, paddingHorizontal: 20 },
-  greeting: { fontSize: 22, fontWeight: "700", color: "#10241a", marginBottom: 12 },
-  offline: { color: "#8a6d1a", marginBottom: 8 },
-  balanceCard: { backgroundColor: "#17b978", borderRadius: 16, padding: 20, marginBottom: 20 },
-  balanceLabel: { color: "#e6fff4", fontSize: 14 },
-  balanceValue: { color: "#ffffff", fontSize: 34, fontWeight: "800", marginVertical: 4 },
-  balanceAge: { color: "#d2f7e6", fontSize: 12 },
-  sectionTitle: { fontSize: 16, fontWeight: "700", color: "#10241a", marginBottom: 8 },
-  list: { flex: 1 },
-  txnRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#d7e8de",
-  },
-  txnLeft: { flexShrink: 1, paddingRight: 12 },
-  txnMerchant: { fontSize: 15, fontWeight: "600", color: "#10241a" },
-  txnAmount: { fontSize: 15, fontWeight: "700" },
-  inflow: { color: "#0c8a56" },
-  outflow: { color: "#b3261e" },
-  muted: { color: "#5f7268", fontSize: 12 },
-  cta: { backgroundColor: "#10241a", borderRadius: 12, padding: 16, alignItems: "center" },
-  ctaText: { color: "#ffffff", fontWeight: "700" },
+  root: { flex: 1, backgroundColor: theme.bg },
+  body: { flex: 1 },
+  loading: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.bg },
+  loadingText: { color: theme.slate },
 });

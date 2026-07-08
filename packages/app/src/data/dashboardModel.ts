@@ -37,13 +37,24 @@ export interface DashboardTxn {
   pending: boolean;
 }
 
+export interface TxnGroup {
+  /** "Today", "Yesterday", or a date like "May 12, 2026". */
+  label: string;
+  items: DashboardTxn[];
+}
+
 export interface DashboardViewModel {
   hasAccounts: boolean;
   availableCashFormatted: string;
   bucketAllocatedFormatted: string;
   upcomingObligationsFormatted: string;
+  /** Sum of inflows / outflows whose postedDate falls in the current month. */
+  incomeThisMonthFormatted: string;
+  expensesThisMonthFormatted: string;
   dataAgeLabel: string;
   recentTransactions: DashboardTxn[];
+  /** All non-removed transactions, newest first, grouped by day (mockup: Transactions screen). */
+  transactionGroups: TxnGroup[];
   lastSequence: number;
 }
 
@@ -66,9 +77,8 @@ export function buildDashboardViewModel(input: {
 
   const state = computeFinancialState({ accounts, projection, buckets, bills, todayLocal });
 
-  const recentTransactions = effectiveTransactions(projection)
+  const sorted = effectiveTransactions(projection)
     .sort((a, b) => (b.postedDate ?? "").localeCompare(a.postedDate ?? "") || b.lastSequence - a.lastSequence)
-    .slice(0, 5)
     .map((t) => ({
       txnId: t.txnId,
       merchant: t.effectiveMerchant,
@@ -77,17 +87,48 @@ export function buildDashboardViewModel(input: {
       isInflow: t.amountMinor > 0,
       ...(t.postedDate !== undefined ? { date: t.postedDate } : {}),
       pending: t.status === "pending",
+      amountMinor: t.amountMinor,
     }));
+
+  const month = todayLocal.slice(0, 7);
+  const inMonth = sorted.filter((t) => t.date?.startsWith(month));
+  const incomeMinor = inMonth.filter((t) => t.amountMinor > 0).reduce((a, t) => a + t.amountMinor, 0);
+  const expensesMinor = inMonth.filter((t) => t.amountMinor < 0).reduce((a, t) => a - t.amountMinor, 0);
+
+  const groups: TxnGroup[] = [];
+  for (const { amountMinor: _drop, ...txn } of sorted) {
+    const label = dayLabel(txn.date, todayLocal);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(txn);
+    else groups.push({ label, items: [txn] });
+  }
 
   return {
     hasAccounts: accounts.length > 0,
     availableCashFormatted: formatMinor(state.availableCashMinor),
     bucketAllocatedFormatted: formatMinor(state.bucketAllocatedMinor),
     upcomingObligationsFormatted: formatMinor(state.upcomingObligationsMinor),
+    incomeThisMonthFormatted: formatMinor(incomeMinor),
+    expensesThisMonthFormatted: formatMinor(expensesMinor),
     dataAgeLabel: dataAgeLabel(state.dataAsOf, nowIso, accounts.length > 0),
-    recentTransactions,
+    recentTransactions: groups.flatMap((g) => g.items).slice(0, 5),
+    transactionGroups: groups,
     lastSequence: state.lastSequence,
   };
+}
+
+function dayLabel(date: string | undefined, todayLocal: string): string {
+  if (!date) return "Pending";
+  if (date === todayLocal) return "Today";
+  const yesterday = new Date(`${todayLocal}T12:00:00Z`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  if (date === yesterday.toISOString().slice(0, 10)) return "Yesterday";
+  return new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 /** Read-only-class freshness labels (docs/verificationEngine.md). */

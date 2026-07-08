@@ -62,6 +62,22 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return reply.code(202).send({ handled: false });
   });
 
+  /**
+   * On-demand refresh — the server half of verification's refresh-race
+   * (docs/verificationEngine.md): the device calls this when its data is
+   * outside the freshness window, with its own 3s timeout. Draining
+   * transactions/sync is idempotent, so a webhook landing at the same
+   * moment cannot double-ingest.
+   */
+  app.post<{ Params: { itemId: string } }>("/items/:itemId/refresh", async (request, reply) => {
+    try {
+      const outcome = await syncPlaidItem(deps, request.params.itemId);
+      return reply.send(outcome);
+    } catch {
+      return reply.code(502).send({ error: "aggregator refresh failed" });
+    }
+  });
+
   /** Device delta sync (ADR-001: down — events by server sequence). */
   app.get<{ Querystring: { userId?: string; since?: string; limit?: string } }>(
     "/events",

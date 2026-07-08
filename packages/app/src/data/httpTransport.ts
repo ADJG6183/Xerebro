@@ -23,5 +23,11 @@ export function httpTransport(baseUrl: string): SyncTransport {
       });
       if (!res.ok) throw new Error(`sync push failed: HTTP ${res.status}`);
     },
+    async refreshItem(itemId) {
+      const res = await fetch(`${baseUrl}/items/${encodeURIComponent(itemId)}/refresh`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`refresh failed: HTTP ${res.status}`);
+    },
   };
 }

@@ -35,6 +35,7 @@ Xerebro is **local-first**. The device is where decisions happen; the backend is
 | Vector memory | Backend | Deferred in v1 (see V1Scope.md). |
 | Push notifications | Backend | APNs/FCM. |
 | Auth / identity | Backend + device biometric lock | See SecurityPrivacy.md. |
+| Recommendation audit records | Created on device (where decisions run), synced up as `RecommendationRecorded` events | Durable in the server event log; retrievable on any device. Gap found during M4: the original table omitted this row. |
 
 ### What syncs, and in which direction
 

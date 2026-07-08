@@ -31,6 +31,8 @@ export interface Account {
   status: "active" | "disconnected" | "closed";
   /** Manual accounts only: the ledger's starting point. */
   openingBalanceMinor?: MinorUnits;
+  /** Aggregator accounts only: the item to target for on-demand refresh. */
+  plaidItemId?: string;
 }
 
 export interface Bucket {

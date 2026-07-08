@@ -43,6 +43,20 @@ describe("HTTP surface (real app, fake seams)", () => {
     expect(res.json()).toEqual({ handled: false });
   });
 
+  it("POST /items/:id/refresh drains sync on demand; aggregator failure maps to 502", async () => {
+    const app = buildApp(
+      await makeDeps({ "": page({ added: [plaidTxn({ transaction_id: "t-r" })] }, "c1") }),
+    );
+    const ok = await app.inject({ method: "POST", url: "/items/item-1/refresh" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ appended: 1 });
+
+    const failing = buildApp(await makeDeps({})); // fake gateway has no page scripted → throws
+    const bad = await failing.inject({ method: "POST", url: "/items/item-1/refresh" });
+    expect(bad.statusCode).toBe(502);
+    expect(bad.json()).toEqual({ error: "aggregator refresh failed" });
+  });
+
   it("rejects unverified webhooks with 401", async () => {
     const deps = await makeDeps({});
     deps.webhookVerifier = { verify: async () => false };
