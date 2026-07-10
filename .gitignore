@@ -7,3 +7,4 @@ dist/
 # Secrets — never committed (SecurityPrivacy.md)
 .env
 .env.local
+CLAUDE.md
