@@ -11,6 +11,7 @@ import {
   InMemoryItemStore,
   InMemoryTxnRegistry,
   type AppDeps,
+  InMemoryAuthStore,
 } from "@xerebro/server";
 import type { EventEnvelope } from "@xerebro/engines";
 import { InMemoryDeviceLog } from "../src/data/deviceLog";
@@ -32,20 +33,39 @@ function makeServer(): { deps: AppDeps; app: ReturnType<typeof buildApp> } {
     now: () => "2026-07-07T12:00:00.000Z",
     newEventId: () => `srv-evt-${++n}`,
     webhookVerifier: DEV_TRUST_ALL_VERIFIER,
+    auth: new InMemoryAuthStore({
+      now: () => "2026-07-07T12:00:00.000Z",
+      newId: (() => { let a = 0; return () => (++a % 2 === 1 ? `user-${(a + 1) / 2}` : `device-${a / 2}`); })(),
+    }),
   };
   return { deps, app: buildApp(deps) };
 }
 
-/** The app's SyncTransport driven through the real HTTP layer via inject. */
+/** The app's SyncTransport driven through the real HTTP layer via inject.
+ * Registers lazily; every call carries the bearer token. */
 function injectTransport(app: ReturnType<typeof buildApp>): SyncTransport {
+  let tokenPromise: Promise<string> | null = null;
+  const token = () =>
+    (tokenPromise ??= app
+      .inject({ method: "POST", url: "/auth/register", payload: {} })
+      .then((r) => (r.json() as { accessToken: string }).accessToken));
   return {
-    async getEventsSince(userId, since) {
-      const res = await app.inject({ method: "GET", url: `/events?userId=${userId}&since=${since}` });
+    async getEventsSince(since) {
+      const res = await app.inject({
+        method: "GET",
+        url: `/events?since=${since}`,
+        headers: { authorization: `Bearer ${await token()}` },
+      });
       if (res.statusCode !== 200) throw new Error(`pull failed: ${res.statusCode}`);
       return res.json() as { events: EventEnvelope[]; lastSequence: number };
     },
-    async postEvents(userId, events) {
-      const res = await app.inject({ method: "POST", url: "/events", payload: { userId, events } });
+    async postEvents(events) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: { events },
+        headers: { authorization: `Bearer ${await token()}` },
+      });
       if (res.statusCode !== 200) throw new Error(`push failed: ${res.statusCode}`);
     },
   };
@@ -103,10 +123,10 @@ describe("device ↔ server sync spine", () => {
     const transport = injectTransport(app);
 
     const phoneA = new InMemoryDeviceLog();
-    await pushUserEvents(transport, phoneA, "user-1", demoEvents(factory("device-a")));
+    await pushUserEvents(transport, phoneA, demoEvents(factory("device-a")));
 
     const phoneB = new InMemoryDeviceLog(); // fresh install, second device
-    await pullOnce(transport, phoneB, "user-1");
+    await pullOnce(transport, phoneB);
 
     const vmA = buildDashboardViewModel({ events: await phoneA.all(), todayLocal: TODAY, nowIso: NOW });
     const vmB = buildDashboardViewModel({ events: await phoneB.all(), todayLocal: TODAY, nowIso: NOW });
@@ -124,8 +144,8 @@ describe("device ↔ server sync spine", () => {
     const phone = new InMemoryDeviceLog();
 
     const events = demoEvents(factory("device-a"));
-    await pushUserEvents(transport, phone, "user-1", events);
-    await pushUserEvents(transport, phone, "user-1", events); // retry, same actionKeys
+    await pushUserEvents(transport, phone, events);
+    await pushUserEvents(transport, phone, events); // retry, same actionKeys
 
     expect(await deps.events.lastSequence("user-1")).toBe(3);
     expect(await phone.lastSequence()).toBe(3);
@@ -150,19 +170,19 @@ describe("device ↔ server sync spine", () => {
         categorySource: "user",
       }),
     );
-    await pushUserEvents(transport, seeder, "user-1", txns);
+    await pushUserEvents(transport, seeder, txns);
 
     // A page-size-2 transport wrapper proves the pull loop drains everything.
     const paged: SyncTransport = {
-      async getEventsSince(userId, since) {
-        const full = await transport.getEventsSince(userId, since);
+      async getEventsSince(since) {
+        const full = await transport.getEventsSince(since);
         return { ...full, events: full.events.slice(0, 2) };
       },
       postEvents: transport.postEvents,
     };
 
     const phone = new InMemoryDeviceLog();
-    const result = await pullOnce(paged, phone, "user-1");
+    const result = await pullOnce(paged, phone);
     expect(result.pulled).toBe(7);
     expect(await phone.lastSequence()).toBe(7);
   });

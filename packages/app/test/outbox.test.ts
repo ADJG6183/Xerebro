@@ -11,6 +11,7 @@ import {
   InMemoryItemStore,
   InMemoryTxnRegistry,
   type AppDeps,
+  InMemoryAuthStore,
 } from "@xerebro/server";
 import type { EventEnvelope } from "@xerebro/engines";
 import { buildDashboardViewModel } from "../src/data/dashboardModel";
@@ -33,6 +34,10 @@ function makeServer() {
     now: () => NOW,
     newEventId: () => `srv-${++n}`,
     webhookVerifier: DEV_TRUST_ALL_VERIFIER,
+    auth: new InMemoryAuthStore({
+      now: () => NOW,
+      newId: (() => { let a = 0; return () => (++a % 2 === 1 ? `user-${(a + 1) / 2}` : `device-${a / 2}`); })(),
+    }),
   };
   return { deps, app: buildApp(deps) };
 }
@@ -40,15 +45,29 @@ function makeServer() {
 /** Transport with a network switch: offline() throws on every call. */
 function switchableTransport(app: ReturnType<typeof buildApp>) {
   let online = true;
+  let tokenPromise: Promise<string> | null = null;
+  const token = () =>
+    (tokenPromise ??= app
+      .inject({ method: "POST", url: "/auth/register", payload: {} })
+      .then((r) => (r.json() as { accessToken: string }).accessToken));
   const transport: SyncTransport = {
-    async getEventsSince(userId, since) {
+    async getEventsSince(since) {
       if (!online) throw new Error("network down");
-      const res = await app.inject({ method: "GET", url: `/events?userId=${userId}&since=${since}` });
+      const res = await app.inject({
+        method: "GET",
+        url: `/events?since=${since}`,
+        headers: { authorization: `Bearer ${await token()}` },
+      });
       return res.json() as { events: EventEnvelope[]; lastSequence: number };
     },
-    async postEvents(userId, events) {
+    async postEvents(events) {
       if (!online) throw new Error("network down");
-      const res = await app.inject({ method: "POST", url: "/events", payload: { userId, events } });
+      const res = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: { events },
+        headers: { authorization: `Bearer ${await token()}` },
+      });
       if (res.statusCode !== 200) throw new Error(`push ${res.statusCode}`);
     },
   };
@@ -94,7 +113,7 @@ describe("offline outbox", () => {
     const outbox = new InMemoryOutbox();
 
     setOnline(false); // ✂ no network
-    const result = await sendOrQueue(transport, log, outbox, "user-1", demoEvents(factory("device-a")));
+    const result = await sendOrQueue(transport, log, outbox, demoEvents(factory("device-a")));
     expect(result.status).toBe("queued");
     expect(await outbox.size()).toBe(2);
     expect(await server.events.lastSequence("user-1")).toBe(0); // nothing reached the server
@@ -109,7 +128,7 @@ describe("offline outbox", () => {
     expect(optimistic.availableCashFormatted).toBe("$4,995.50");
 
     setOnline(true); // network returns
-    const flush = await flushOutbox(transport, log, outbox, "user-1");
+    const flush = await flushOutbox(transport, log, outbox);
     expect(flush).toEqual({ flushed: 2, pending: 0 });
     expect(await outbox.size()).toBe(0);
 
@@ -132,17 +151,17 @@ describe("offline outbox", () => {
     // postEvents succeeds server-side but the response "gets lost".
     const flaky: SyncTransport = {
       ...transport,
-      async postEvents(userId, events) {
-        await transport.postEvents(userId, events);
+      async postEvents(events) {
+        await transport.postEvents(events);
         throw new Error("connection reset while reading response");
       },
     };
 
-    const first = await sendOrQueue(flaky, log, outbox, "user-1", demoEvents(factory("device-a")));
+    const first = await sendOrQueue(flaky, log, outbox, demoEvents(factory("device-a")));
     expect(first.status).toBe("queued"); // device thinks it failed…
     expect(await server.events.lastSequence("user-1")).toBe(2); // …server applied it
 
-    const flush = await flushOutbox(transport, log, outbox, "user-1"); // healthy retry
+    const flush = await flushOutbox(transport, log, outbox); // healthy retry
     expect(flush.pending).toBe(0);
     expect(await server.events.lastSequence("user-1")).toBe(2); // idempotency keys: no duplicates
     expect((await log.all()).map((e) => e.sequence)).toEqual([1, 2]);
@@ -161,7 +180,7 @@ describe("offline outbox", () => {
     };
 
     // Seed while online so the device has state, then cut the cord.
-    await sendOrQueue(transport, flow.log, flow.outbox, "user-1", demoEvents(flow.factory));
+    await sendOrQueue(transport, flow.log, flow.outbox, demoEvents(flow.factory));
     setOnline(false);
 
     const result = await runPurchaseCheck(flow, 60_000, "headphones");
@@ -171,7 +190,7 @@ describe("offline outbox", () => {
     expect(result.explanation).toContain("the headphones ($600.00)");
 
     setOnline(true);
-    await flushOutbox(transport, flow.log, flow.outbox, "user-1");
+    await flushOutbox(transport, flow.log, flow.outbox);
     const rec = (await server.events.eventsSince("user-1", 0)).find(
       (e) => e.type === "RecommendationRecorded",
     );

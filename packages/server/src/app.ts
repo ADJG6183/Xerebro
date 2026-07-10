@@ -4,7 +4,8 @@
  * app with fakes at the seams.
  */
 import { validateEventPayload } from "@xerebro/engines";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import type { AuthSession, AuthStore } from "./auth/store";
 import type { UnsequencedEvent } from "./eventStore";
 import {
   explainDecision,
@@ -31,9 +32,18 @@ export const DEV_TRUST_ALL_VERIFIER: WebhookVerifier = {
 
 export interface AppDeps extends AclDeps {
   webhookVerifier: WebhookVerifier;
+  auth: AuthStore;
   /** Absent = no provider configured; /explanations returns 503 and clients
    * keep their template explanations (docs/AIArchitecture.md fallback). */
   llm?: LlmGateway;
+}
+
+/** Paths that authenticate themselves differently (or not yet). */
+const UNAUTHENTICATED_PREFIXES = ["/auth/", "/webhooks/"];
+
+function sessionOf(request: FastifyRequest): AuthSession {
+  // Set by the onRequest hook; routes behind it can rely on its presence.
+  return (request as FastifyRequest & { session: AuthSession }).session;
 }
 
 interface PlaidWebhookBody {
@@ -43,12 +53,42 @@ interface PlaidWebhookBody {
 }
 
 interface UserEventsBody {
-  userId?: string;
   events?: UnsequencedEvent[];
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
+
+  /**
+   * The trust boundary (SecurityPrivacy.md): identity comes from a verified
+   * bearer token, NEVER from the request. Every route except /auth/* and
+   * /webhooks/* (which verifies itself Plaid's way) requires one.
+   */
+  app.decorateRequest("session", null);
+  app.addHook("onRequest", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? "";
+    if (UNAUTHENTICATED_PREFIXES.some((p) => path.startsWith(p))) return;
+    const header = request.headers.authorization;
+    const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+    const session = token ? await deps.auth.verifyAccess(token) : null;
+    if (!session) return reply.code(401).send({ error: "authentication required" });
+    (request as FastifyRequest & { session: AuthSession }).session = session;
+  });
+
+  /** Anonymous device registration (staged auth — identity linking later). */
+  app.post<{ Body: { deviceName?: string } }>("/auth/register", async (request, reply) => {
+    const result = await deps.auth.registerDevice(request.body?.deviceName ?? "unnamed device");
+    return reply.code(201).send(result);
+  });
+
+  /** Rotate the token pair. 401 = invalid/expired/stolen → client re-registers. */
+  app.post<{ Body: { refreshToken?: string } }>("/auth/refresh", async (request, reply) => {
+    const { refreshToken } = request.body ?? {};
+    if (!refreshToken) return reply.code(400).send({ error: "refreshToken required" });
+    const result = await deps.auth.refresh(refreshToken);
+    if (!result) return reply.code(401).send({ error: "invalid refresh token" });
+    return reply.send(result);
+  });
 
   /**
    * Plaid webhooks are notifications-to-fetch: the body says "item X has
@@ -80,6 +120,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
    * moment cannot double-ingest.
    */
   app.post<{ Params: { itemId: string } }>("/items/:itemId/refresh", async (request, reply) => {
+    // Ownership check: you can only refresh YOUR bank connections.
+    const item = await deps.items.get(request.params.itemId);
+    if (!item || item.userId !== sessionOf(request).userId) {
+      return reply.code(404).send({ error: "unknown item" });
+    }
     try {
       const outcome = await syncPlaidItem(deps, request.params.itemId);
       return reply.send(outcome);
@@ -111,12 +156,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
   });
 
-  /** Device delta sync (ADR-001: down — events by server sequence). */
-  app.get<{ Querystring: { userId?: string; since?: string; limit?: string } }>(
+  /** Device delta sync (ADR-001: down — events by server sequence).
+   * The userId is the TOKEN's, not the caller's claim. */
+  app.get<{ Querystring: { since?: string; limit?: string } }>(
     "/events",
     async (request, reply) => {
-      const { userId, since = "0", limit = "500" } = request.query;
-      if (!userId) return reply.code(400).send({ error: "userId required" });
+      const { userId } = sessionOf(request);
+      const { since = "0", limit = "500" } = request.query;
       const events = await deps.events.eventsSince(
         userId,
         Math.max(0, Number.parseInt(since, 10) || 0),
@@ -128,9 +174,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   /** Device events up (ADR-001: user actions/annotations; producer idempotency keys). */
   app.post<{ Body: UserEventsBody }>("/events", async (request, reply) => {
-    const { userId, events } = request.body ?? {};
-    if (!userId || !Array.isArray(events) || events.length === 0) {
-      return reply.code(400).send({ error: "userId and non-empty events[] required" });
+    const { userId } = sessionOf(request);
+    const { events } = request.body ?? {};
+    if (!Array.isArray(events) || events.length === 0) {
+      return reply.code(400).send({ error: "non-empty events[] required" });
     }
     for (const e of events) {
       if (e.source !== "user" || !e.idempotencyKey || !e.eventId || !e.type) {

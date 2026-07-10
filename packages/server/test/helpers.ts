@@ -3,6 +3,7 @@ import { InMemoryEventStore } from "../src/eventStore";
 import { InMemoryItemStore, InMemoryTxnRegistry } from "../src/plaid/stores";
 import type { AppDeps } from "../src/app";
 import { DEV_TRUST_ALL_VERIFIER } from "../src/app";
+import { InMemoryAuthStore } from "../src/auth/store";
 
 export function plaidTxn(overrides: Partial<PlaidTransaction> & { transaction_id: string }): PlaidTransaction {
   return {
@@ -37,6 +38,7 @@ export class FakePlaidGateway implements PlaidGateway {
 
 export async function makeDeps(pages: Record<string, PlaidSyncPage>): Promise<AppDeps> {
   let eventCounter = 0;
+  let authCounter = 0;
   const items = new InMemoryItemStore();
   await items.put({ itemId: "item-1", userId: "user-1", accessTokenRef: "tok-ref", cursor: "" });
   return {
@@ -47,5 +49,27 @@ export async function makeDeps(pages: Record<string, PlaidSyncPage>): Promise<Ap
     now: () => "2026-07-07T12:00:00.000Z",
     newEventId: () => `evt-${++eventCounter}`,
     webhookVerifier: DEV_TRUST_ALL_VERIFIER,
+    // Deterministic: first registration is user-1/device-1 (matches seeded item-1).
+    auth: new InMemoryAuthStore({
+      now: () => "2026-07-07T12:00:00.000Z",
+      newId: () => (++authCounter % 2 === 1 ? `user-${(authCounter + 1) / 2}` : `device-${authCounter / 2}`),
+    }),
+  };
+}
+
+/** Register a device and return ready-to-use auth headers. */
+export async function registerHeaders(app: {
+  inject: (o: object) => Promise<{ json: () => unknown }>;
+}): Promise<{ headers: { authorization: string }; userId: string; refreshToken: string }> {
+  const res = await app.inject({
+    method: "POST",
+    url: "/auth/register",
+    payload: { deviceName: "test-device" },
+  });
+  const body = res.json() as { accessToken: string; userId: string; refreshToken: string };
+  return {
+    headers: { authorization: `Bearer ${body.accessToken}` },
+    userId: body.userId,
+    refreshToken: body.refreshToken,
   };
 }

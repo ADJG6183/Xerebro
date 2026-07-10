@@ -12,6 +12,7 @@ import {
   InMemoryItemStore,
   InMemoryTxnRegistry,
   type AppDeps,
+  InMemoryAuthStore,
 } from "@xerebro/server";
 import type { EventEnvelope } from "@xerebro/engines";
 import { InMemoryDeviceLog } from "../src/data/deviceLog";
@@ -30,6 +31,7 @@ const NOW = "2026-07-07T10:00:00.000Z";
 
 function makeServer() {
   let n = 0;
+  let authN = 0;
   const deps: AppDeps = {
     plaid: {
       async transactionsSync() {
@@ -42,19 +44,40 @@ function makeServer() {
     now: () => NOW,
     newEventId: () => `srv-${++n}`,
     webhookVerifier: DEV_TRUST_ALL_VERIFIER,
+    // Deterministic ids: first registration = user-1/device-1, matching the
+    // ids tests use when seeding the event store directly.
+    auth: new InMemoryAuthStore({
+      now: () => NOW,
+      newId: () => (++authN % 2 === 1 ? `user-${(authN + 1) / 2}` : `device-${authN / 2}`),
+    }),
   };
   return { deps, app: buildApp(deps) };
 }
 
+/** Registers lazily on first use; every call carries the bearer token. */
 function injectTransport(app: ReturnType<typeof buildApp>): SyncTransport {
+  let tokenPromise: Promise<string> | null = null;
+  const token = () =>
+    (tokenPromise ??= app
+      .inject({ method: "POST", url: "/auth/register", payload: { deviceName: "test" } })
+      .then((r) => (r.json() as { accessToken: string }).accessToken));
   return {
-    async getEventsSince(userId, since) {
-      const res = await app.inject({ method: "GET", url: `/events?userId=${userId}&since=${since}` });
+    async getEventsSince(since) {
+      const res = await app.inject({
+        method: "GET",
+        url: `/events?since=${since}`,
+        headers: { authorization: `Bearer ${await token()}` },
+      });
       if (res.statusCode !== 200) throw new Error(`pull ${res.statusCode}`);
       return res.json() as { events: EventEnvelope[]; lastSequence: number };
     },
-    async postEvents(userId, events) {
-      const res = await app.inject({ method: "POST", url: "/events", payload: { userId, events } });
+    async postEvents(events) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/events",
+        payload: { events },
+        headers: { authorization: `Bearer ${await token()}` },
+      });
       if (res.statusCode !== 200) throw new Error(`push ${res.statusCode}`);
     },
   };
@@ -66,7 +89,7 @@ function factory(deviceId: string): EventFactoryDeps {
 }
 
 async function seedManualAccount(flow: DecisionFlowDeps, openingMinor = 500_000) {
-  await pushUserEvents(flow.transport, flow.log, flow.userId, [
+  await pushUserEvents(flow.transport, flow.log, [
     accountUpserted(flow.factory, {
       accountId: "manual-checking",
       type: "checking",

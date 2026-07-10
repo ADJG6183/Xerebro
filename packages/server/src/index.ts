@@ -1,3 +1,4 @@
+export * from "./auth/store";
 export * from "./eventStore";
 export * from "./plaid/gateway";
 export * from "./plaid/stores";

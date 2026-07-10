@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
-import { makeDeps, page, plaidTxn } from "./helpers";
+import { makeDeps, page, plaidTxn, registerHeaders } from "./helpers";
 
 describe("HTTP surface (real app, fake seams)", () => {
   it("webhook → drain → events available on the device sync endpoint", async () => {
@@ -21,14 +21,15 @@ describe("HTTP surface (real app, fake seams)", () => {
     expect(webhook.statusCode).toBe(200);
     expect(webhook.json()).toMatchObject({ handled: true, appended: 1 });
 
-    const sync = await app.inject({ method: "GET", url: "/events?userId=user-1&since=0" });
+    const auth = await registerHeaders(app);
+    const sync = await app.inject({ method: "GET", url: "/events?since=0", headers: auth.headers });
     expect(sync.statusCode).toBe(200);
     const body = sync.json();
     expect(body.lastSequence).toBe(1);
     expect(body.events[0]).toMatchObject({ type: "TransactionPosted", sequence: 1 });
 
     // Delta semantics: already-synced devices get nothing new.
-    const delta = await app.inject({ method: "GET", url: "/events?userId=user-1&since=1" });
+    const delta = await app.inject({ method: "GET", url: "/events?since=1", headers: auth.headers });
     expect(delta.json().events).toHaveLength(0);
   });
 
@@ -47,12 +48,14 @@ describe("HTTP surface (real app, fake seams)", () => {
     const app = buildApp(
       await makeDeps({ "": page({ added: [plaidTxn({ transaction_id: "t-r" })] }, "c1") }),
     );
-    const ok = await app.inject({ method: "POST", url: "/items/item-1/refresh" });
+    const owner = await registerHeaders(app); // user-1 owns item-1
+    const ok = await app.inject({ method: "POST", url: "/items/item-1/refresh", headers: owner.headers });
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toMatchObject({ appended: 1 });
 
     const failing = buildApp(await makeDeps({})); // fake gateway has no page scripted → throws
-    const bad = await failing.inject({ method: "POST", url: "/items/item-1/refresh" });
+    const failOwner = await registerHeaders(failing);
+    const bad = await failing.inject({ method: "POST", url: "/items/item-1/refresh", headers: failOwner.headers });
     expect(bad.statusCode).toBe(502);
     expect(bad.json()).toEqual({ error: "aggregator refresh failed" });
   });
@@ -71,6 +74,7 @@ describe("HTTP surface (real app, fake seams)", () => {
 
   it("device events up: appends with producer idempotency, resend is a no-op", async () => {
     const app = buildApp(await makeDeps({}));
+    const auth = await registerHeaders(app);
     const annotation = {
       eventId: "dev-evt-1",
       type: "TransactionAnnotated",
@@ -84,14 +88,14 @@ describe("HTTP surface (real app, fake seams)", () => {
     const first = await app.inject({
       method: "POST",
       url: "/events",
-      payload: { userId: "user-1", events: [annotation] },
+      headers: auth.headers, payload: { events: [annotation] },
     });
     expect(first.json()).toMatchObject({ appended: [1], lastSequence: 1 });
 
     const resend = await app.inject({
       method: "POST",
       url: "/events",
-      payload: { userId: "user-1", events: [annotation] },
+      headers: auth.headers, payload: { events: [annotation] },
     });
     expect(resend.json()).toMatchObject({ appended: [], lastSequence: 1 });
   });
@@ -99,11 +103,12 @@ describe("HTTP surface (real app, fake seams)", () => {
   it("rejects poison payloads at the door: float money → 400, nothing appended", async () => {
     const deps = await makeDeps({});
     const app = buildApp(deps);
+    const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",
       url: "/events",
+      headers: auth.headers,
       payload: {
-        userId: "user-1",
         events: [
           {
             eventId: "ok-1", type: "TransactionAnnotated", schemaVersion: 1,
@@ -126,11 +131,12 @@ describe("HTTP surface (real app, fake seams)", () => {
 
   it("rejects nested float money hidden inside an audit-record payload", async () => {
     const app = buildApp(await makeDeps({}));
+    const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",
       url: "/events",
+      headers: auth.headers,
       payload: {
-        userId: "user-1",
         events: [
           {
             eventId: "rec-1", type: "RecommendationRecorded", schemaVersion: 1,
@@ -146,11 +152,12 @@ describe("HTTP surface (real app, fake seams)", () => {
 
   it("rejects device events that claim a non-user source (spoofed provenance)", async () => {
     const app = buildApp(await makeDeps({}));
+    const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",
       url: "/events",
+      headers: auth.headers,
       payload: {
-        userId: "user-1",
         events: [
           {
             eventId: "dev-evt-2",

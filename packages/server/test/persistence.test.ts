@@ -6,13 +6,16 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
+import { randomUUID } from "node:crypto";
 import {
   createPool,
   ensureSchema,
+  PostgresAuthStore,
   PostgresEventStore,
   PostgresItemStore,
   PostgresTxnRegistry,
 } from "../src/persistence/postgres";
+import { authStoreContract } from "./authContract";
 import { eventStoreContract } from "./storeContract";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -45,6 +48,15 @@ describe.skipIf(!url)("postgres persistence", () => {
   function createPoolLazy(): pg.Pool {
     return pool;
   }
+
+  authStoreContract(
+    "postgres",
+    async () =>
+      new PostgresAuthStore(createPoolLazy(), {
+        now: () => new Date().toISOString(),
+        newId: () => randomUUID(),
+      }),
+  );
 
   it("ItemStore round-trips and updates cursors", async () => {
     const items = new PostgresItemStore(pool);

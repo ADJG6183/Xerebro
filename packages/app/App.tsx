@@ -19,9 +19,10 @@ import {
   type PurchaseCheckResult,
 } from "./src/data/decisionFlow";
 import type { DeviceEventLog } from "./src/data/deviceLog";
-import { httpTransport } from "./src/data/httpTransport";
+import { authedHttpTransport } from "./src/data/httpTransport";
 import { openDeviceLog } from "./src/data/openDeviceLog";
-import { flushOutbox, pullOnce, sendOrQueue } from "./src/data/syncClient";
+import { openTokenStore } from "./src/data/openTokenStore";
+import { flushOutbox, pullOnce, sendOrQueue, type SyncTransport } from "./src/data/syncClient";
 import { withPending, type Outbox } from "./src/data/outbox";
 import { openOutbox } from "./src/data/openOutbox";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "./src/data/userEvents";
@@ -32,7 +33,6 @@ import { TabBar, type Tab } from "./src/ui/TabBar";
 import { theme } from "./src/ui/theme";
 import { TransactionsScreen } from "./src/ui/TransactionsScreen";
 
-const USER_ID = "user-1"; // real auth arrives with the security milestone
 const API_URL = resolveApiUrl();
 
 const factoryDeps: EventFactoryDeps = {
@@ -45,7 +45,10 @@ export default function App() {
   const [log, setLog] = useState<DeviceEventLog | null>(null);
   const [outbox, setOutbox] = useState<Outbox | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
-  const [transport] = useState(() => httpTransport(API_URL));
+  // Auth-aware transport: registers this device on first contact, refreshes
+  // rotated tokens transparently, stores the pair in the platform keychain.
+  const [transport, setTransport] = useState<SyncTransport | null>(null);
+  const [userId, setUserId] = useState("unregistered");
   const [vm, setVm] = useState<DashboardViewModel | null>(null);
   const [offline, setOffline] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -74,28 +77,36 @@ export default function App() {
   }, []);
 
   const sync = useCallback(
-    async (deviceLog: DeviceEventLog, box: Outbox) => {
+    async (t: SyncTransport, deviceLog: DeviceEventLog, box: Outbox) => {
       try {
-        await flushOutbox(transport, deviceLog, box, USER_ID); // queued writes first
-        await pullOnce(transport, deviceLog, USER_ID);
+        await flushOutbox(t, deviceLog, box); // queued writes first
+        await pullOnce(t, deviceLog);
         setOffline(false);
       } catch {
         setOffline(true); // local-first: render what we have, labeled
       }
       await rebuild(deviceLog, box);
     },
-    [transport, rebuild],
+    [rebuild],
   );
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [deviceLog, box] = await Promise.all([openDeviceLog(), openOutbox()]);
+      const [deviceLog, box, tokenStore] = await Promise.all([
+        openDeviceLog(),
+        openOutbox(),
+        openTokenStore(),
+      ]);
       if (cancelled) return;
+      const t = authedHttpTransport(API_URL, tokenStore);
       setLog(deviceLog);
       setOutbox(box);
+      setTransport(t);
       await rebuild(deviceLog, box); // cache paints first
-      await sync(deviceLog, box); // network never blocks first paint
+      await sync(t, deviceLog, box); // network never blocks first paint
+      // Identity is known after first contact (registration happens lazily).
+      setUserId((await tokenStore.get())?.userId ?? "unregistered");
     })();
     return () => {
       cancelled = true;
@@ -103,9 +114,9 @@ export default function App() {
   }, [rebuild, sync]);
 
   const flowDeps = useCallback((): DecisionFlowDeps | null => {
-    if (!log || !outbox) return null;
-    return { log, outbox, transport, factory: factoryDeps, userId: USER_ID };
-  }, [log, outbox, transport]);
+    if (!log || !outbox || !transport) return null;
+    return { log, outbox, transport, factory: factoryDeps, userId };
+  }, [log, outbox, transport, userId]);
 
   const onCheck = useCallback(async () => {
     const deps = flowDeps();
@@ -143,7 +154,7 @@ export default function App() {
   );
 
   const addDemoAccount = useCallback(async () => {
-    if (!log || !outbox) return;
+    if (!log || !outbox || !transport) return;
     const nowIso = factoryDeps.nowIso();
     const events = [
       accountUpserted(factoryDeps, {
@@ -180,17 +191,17 @@ export default function App() {
         categorySource: "user",
       }),
     ];
-    const result = await sendOrQueue(transport, log, outbox!, USER_ID, events);
+    const result = await sendOrQueue(transport!, log, outbox!, events);
     setOffline(result.status === "queued");
     await rebuild(log, outbox!);
   }, [log, outbox, transport, rebuild]);
 
   const onRefresh = useCallback(async () => {
-    if (!log || !outbox) return;
+    if (!log || !outbox || !transport) return;
     setRefreshing(true);
-    await sync(log, outbox);
+    await sync(transport, log, outbox);
     setRefreshing(false);
-  }, [log, outbox, sync]);
+  }, [log, outbox, transport, sync]);
 
   if (!vm) {
     return (

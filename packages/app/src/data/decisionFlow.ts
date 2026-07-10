@@ -75,7 +75,7 @@ export async function runPurchaseCheck(
   let offline = false;
 
   try {
-    await pullOnce(deps.transport, deps.log, deps.userId);
+    await pullOnce(deps.transport, deps.log);
   } catch {
     offline = true;
   }
@@ -87,7 +87,7 @@ export async function runPurchaseCheck(
     const refreshed = await raceRefresh(deps, snapshot.staleItemIds);
     if (refreshed) {
       try {
-        await pullOnce(deps.transport, deps.log, deps.userId);
+        await pullOnce(deps.transport, deps.log);
         snapshot = await computeSnapshot(deps.log, nowIso);
       } catch {
         offline = true;
@@ -124,7 +124,7 @@ export async function runPurchaseCheck(
 
   // The audit record is durable BEFORE anything renders (SystemInvariants.md):
   // queued in the outbox always, synced now if the network cooperates.
-  const submit = await sendOrQueue(deps.transport, deps.log, deps.outbox, deps.userId, [
+  const submit = await sendOrQueue(deps.transport, deps.log, deps.outbox, [
     makeUserEvent(deps.factory, "RecommendationRecorded", record, `rec:${record.recommendationId}`),
   ]);
   if (submit.status === "queued") offline = true;
@@ -164,7 +164,7 @@ export async function enhanceExplanation(
     });
     if (!checkFaithfulness(res.text, record.decision).faithful) return null;
 
-    await sendOrQueue(deps.transport, deps.log, deps.outbox, deps.userId, [
+    await sendOrQueue(deps.transport, deps.log, deps.outbox, [
       makeUserEvent(
         deps.factory,
         "RecommendationExplanationAdded",
@@ -192,7 +192,7 @@ export async function submitFeedback(
   recommendationId: string,
   response: "accepted" | "ignored" | "rejected",
 ): Promise<boolean> {
-  await sendOrQueue(deps.transport, deps.log, deps.outbox, deps.userId, [
+  await sendOrQueue(deps.transport, deps.log, deps.outbox, [
     makeUserEvent(
       deps.factory,
       "FeedbackSubmitted",

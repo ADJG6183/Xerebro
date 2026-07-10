@@ -7,6 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { decidePurchase, type VerificationResult } from "@xerebro/engines";
 import { buildApp, DEV_TRUST_ALL_VERIFIER, type AppDeps } from "../src/app";
+import { InMemoryAuthStore } from "../src/auth/store";
+import { registerHeaders } from "./helpers";
 import { buildPromptPayload, explainDecision } from "../src/llm/explain";
 import type { LlmGateway } from "../src/llm/gateway";
 import { InMemoryEventStore } from "../src/eventStore";
@@ -36,6 +38,7 @@ function scriptedGateway(text: string): LlmGateway & { prompts: string[] } {
 }
 
 function appWith(llm?: LlmGateway) {
+  let authN = 0;
   const deps: AppDeps = {
     plaid: { transactionsSync: async () => { throw new Error("unused"); } },
     events: new InMemoryEventStore(),
@@ -44,9 +47,18 @@ function appWith(llm?: LlmGateway) {
     now: () => "2026-07-08T10:00:00.000Z",
     newEventId: () => "e",
     webhookVerifier: DEV_TRUST_ALL_VERIFIER,
+    auth: new InMemoryAuthStore({
+      now: () => "2026-07-08T10:00:00.000Z",
+      newId: () => `auth-id-${++authN}`,
+    }),
     ...(llm ? { llm } : {}),
   };
   return buildApp(deps);
+}
+
+async function injectExplain(app: ReturnType<typeof buildApp>, payload: unknown) {
+  const { headers } = await registerHeaders(app);
+  return app.inject({ method: "POST", url: "/explanations", payload: payload as object, headers });
 }
 
 describe("explanation proxy", () => {
@@ -89,11 +101,7 @@ describe("explanation proxy", () => {
 
   it("HTTP: invented figures → 422 with violations; client keeps its template", async () => {
     const app = appWith(scriptedGateway("Yes — $600.00 is fine; similar machines cost $349.99."));
-    const res = await app.inject({
-      method: "POST",
-      url: "/explanations",
-      payload: { decision, verification },
-    });
+    const res = await injectExplain(app, { decision, verification });
     expect(res.statusCode).toBe(422);
     expect(res.json().violations[0]).toContain("$349.99");
   });
@@ -104,28 +112,16 @@ describe("explanation proxy", () => {
       { amountMinor: 60_000 },
     );
     const app = appWith(scriptedGateway("Yes — you can afford this, go for it!"));
-    const res = await app.inject({
-      method: "POST",
-      url: "/explanations",
-      payload: { decision: decline, verification },
-    });
+    const res = await injectExplain(app, { decision: decline, verification });
     expect(res.statusCode).toBe(422);
   });
 
   it("HTTP: no provider configured → 503; provider error → 502", async () => {
-    const no = await appWith().inject({
-      method: "POST",
-      url: "/explanations",
-      payload: { decision, verification },
-    });
+    const no = await injectExplain(appWith(), { decision, verification });
     expect(no.statusCode).toBe(503);
 
     const failing: LlmGateway = { complete: async () => { throw new Error("boom"); } };
-    const bad = await appWith(failing).inject({
-      method: "POST",
-      url: "/explanations",
-      payload: { decision, verification },
-    });
+    const bad = await injectExplain(appWith(failing), { decision, verification });
     expect(bad.statusCode).toBe(502);
   });
 });

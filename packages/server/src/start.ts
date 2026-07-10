@@ -8,11 +8,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildApp, DEV_TRUST_ALL_VERIFIER } from "./app";
+import { InMemoryAuthStore } from "./auth/store";
 import { InMemoryEventStore } from "./eventStore";
 import { openAiGateway } from "./llm/gateway";
 import {
   createPool,
   ensureSchema,
+  PostgresAuthStore,
   PostgresEventStore,
   PostgresItemStore,
   PostgresTxnRegistry,
@@ -59,6 +61,9 @@ const app = buildApp({
   events: pool ? new PostgresEventStore(pool) : new InMemoryEventStore(),
   items: pool ? new PostgresItemStore(pool) : new InMemoryItemStore(),
   registry: pool ? new PostgresTxnRegistry(pool) : new InMemoryTxnRegistry(),
+  auth: pool
+    ? new PostgresAuthStore(pool, { now: () => new Date().toISOString(), newId: () => randomUUID() })
+    : new InMemoryAuthStore({ now: () => new Date().toISOString(), newId: () => randomUUID() }),
   now: () => new Date().toISOString(),
   newEventId: () => randomUUID(),
   webhookVerifier: DEV_TRUST_ALL_VERIFIER,

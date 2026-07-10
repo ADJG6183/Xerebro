@@ -13,6 +13,14 @@
  */
 import pg from "pg";
 import type { EventEnvelope } from "@xerebro/engines";
+import {
+  hashToken,
+  mintPair,
+  type AuthDeps,
+  type AuthSession,
+  type AuthStore,
+  type RegisterResult,
+} from "../auth/store";
 import type { AppendResult, EventStore, UnsequencedEvent } from "../eventStore";
 import type { ItemStore, PlaidItem, TxnRegistry } from "../plaid/stores";
 
@@ -61,6 +69,19 @@ export async function ensureSchema(pool: pg.Pool): Promise<void> {
       canonical_id text NOT NULL,
       PRIMARY KEY (user_id, plaid_id)
     );
+    CREATE TABLE IF NOT EXISTS auth_devices (
+      device_id text PRIMARY KEY,
+      user_id text NOT NULL,
+      name text NOT NULL,
+      access_hash text NOT NULL,
+      access_expires_at timestamptz NOT NULL,
+      refresh_hash text NOT NULL,
+      refresh_expires_at timestamptz NOT NULL,
+      prev_refresh_hash text,
+      revoked boolean NOT NULL DEFAULT false
+    );
+    CREATE INDEX IF NOT EXISTS auth_devices_access_hash ON auth_devices (access_hash);
+    CREATE INDEX IF NOT EXISTS auth_devices_refresh_hash ON auth_devices (refresh_hash);
   `);
 }
 
@@ -176,6 +197,83 @@ export class PostgresEventStore implements EventStore {
       [userId],
     );
     return res.rows[0] ? Number(res.rows[0].last_sequence) : 0;
+  }
+}
+
+export class PostgresAuthStore implements AuthStore {
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly deps: AuthDeps,
+  ) {}
+
+  async registerDevice(deviceName: string): Promise<RegisterResult> {
+    const userId = this.deps.newId();
+    const deviceId = this.deps.newId();
+    const { accessToken, refreshToken, fields } = mintPair(this.deps);
+    await this.pool.query(
+      `INSERT INTO auth_devices
+         (device_id, user_id, name, access_hash, access_expires_at, refresh_hash, refresh_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        deviceId,
+        userId,
+        deviceName,
+        fields.accessHash,
+        fields.accessExpiresAt,
+        fields.refreshHash,
+        fields.refreshExpiresAt,
+      ],
+    );
+    return {
+      userId,
+      deviceId,
+      accessToken,
+      accessExpiresAt: fields.accessExpiresAt,
+      refreshToken,
+      refreshExpiresAt: fields.refreshExpiresAt,
+    };
+  }
+
+  async verifyAccess(accessToken: string): Promise<AuthSession | null> {
+    const res = await this.pool.query(
+      `SELECT user_id, device_id FROM auth_devices
+       WHERE access_hash = $1 AND NOT revoked AND access_expires_at > $2`,
+      [hashToken(accessToken), this.deps.now()],
+    );
+    const row = res.rows[0];
+    return row ? { userId: row.user_id, deviceId: row.device_id } : null;
+  }
+
+  async refresh(refreshToken: string): Promise<RegisterResult | null> {
+    const hash = hashToken(refreshToken);
+
+    // Theft signal: a rotated-out token came back → revoke the device.
+    const reused = await this.pool.query(
+      `UPDATE auth_devices SET revoked = true WHERE prev_refresh_hash = $1 RETURNING device_id`,
+      [hash],
+    );
+    if ((reused.rowCount ?? 0) > 0) return null;
+
+    const { accessToken, refreshToken: nextRefresh, fields } = mintPair(this.deps);
+    const res = await this.pool.query(
+      `UPDATE auth_devices
+         SET prev_refresh_hash = refresh_hash,
+             access_hash = $2, access_expires_at = $3,
+             refresh_hash = $4, refresh_expires_at = $5
+       WHERE refresh_hash = $1 AND NOT revoked AND refresh_expires_at > $6
+       RETURNING user_id, device_id`,
+      [hash, fields.accessHash, fields.accessExpiresAt, fields.refreshHash, fields.refreshExpiresAt, this.deps.now()],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      userId: row.user_id,
+      deviceId: row.device_id,
+      accessToken,
+      accessExpiresAt: fields.accessExpiresAt,
+      refreshToken: nextRefresh,
+      refreshExpiresAt: fields.refreshExpiresAt,
+    };
   }
 }
 

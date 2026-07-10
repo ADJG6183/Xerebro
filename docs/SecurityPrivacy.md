@@ -4,6 +4,14 @@ This document is normative. A feature that cannot satisfy it does not ship. (Reg
 
 ## Identity & auth
 
+**Staging (decided 2026-07-10):** the dev stage runs *anonymous device-token
+auth* — each install registers a device account; the server derives the user
+from a verified bearer token (256-bit random, stored hashed, 1h access TTL,
+rotating 30d refresh, rotated-token reuse revokes the device). Request-supplied
+identity does not exist. Passkey/Apple-ID *identity linking* (below) attaches
+to these accounts before launch — it requires a development build and a
+verified domain, which Expo Go cannot provide.
+
 - Sign-in: email + passkey (WebAuthn) as primary; Apple/Google sign-in as convenience. No passwords stored by us.
 - Sessions: short-lived access token + rotating refresh token, bound to a device record. Server can revoke per-device.
 - **App lock:** biometric (Face ID / fingerprint) with PIN fallback, required by default for opening the app and always required for viewing account numbers or changing security settings.
