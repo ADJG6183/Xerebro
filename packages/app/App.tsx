@@ -21,7 +21,9 @@ import {
 import type { DeviceEventLog } from "./src/data/deviceLog";
 import { httpTransport } from "./src/data/httpTransport";
 import { openDeviceLog } from "./src/data/openDeviceLog";
-import { pullOnce, pushUserEvents } from "./src/data/syncClient";
+import { flushOutbox, pullOnce, sendOrQueue } from "./src/data/syncClient";
+import { withPending, type Outbox } from "./src/data/outbox";
+import { openOutbox } from "./src/data/openOutbox";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "./src/data/userEvents";
 import { AskScreen } from "./src/ui/AskScreen";
 import { HomeScreen } from "./src/ui/HomeScreen";
@@ -41,6 +43,8 @@ const factoryDeps: EventFactoryDeps = {
 
 export default function App() {
   const [log, setLog] = useState<DeviceEventLog | null>(null);
+  const [outbox, setOutbox] = useState<Outbox | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
   const [transport] = useState(() => httpTransport(API_URL));
   const [vm, setVm] = useState<DashboardViewModel | null>(null);
   const [offline, setOffline] = useState(false);
@@ -54,8 +58,11 @@ export default function App() {
   const [enhanced, setEnhanced] = useState<EnhancedExplanation | null>(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
 
-  const rebuild = useCallback(async (deviceLog: DeviceEventLog) => {
-    const events = await deviceLog.all();
+  const rebuild = useCallback(async (deviceLog: DeviceEventLog, box: Outbox) => {
+    // Optimistic view: committed events + queued outbox events wearing
+    // provisional sequences. An offline action shows up instantly.
+    const events = withPending(await deviceLog.all(), await box.all());
+    setPendingCount(await box.size());
     const now = new Date();
     setVm(
       buildDashboardViewModel({
@@ -67,14 +74,15 @@ export default function App() {
   }, []);
 
   const sync = useCallback(
-    async (deviceLog: DeviceEventLog) => {
+    async (deviceLog: DeviceEventLog, box: Outbox) => {
       try {
+        await flushOutbox(transport, deviceLog, box, USER_ID); // queued writes first
         await pullOnce(transport, deviceLog, USER_ID);
         setOffline(false);
       } catch {
         setOffline(true); // local-first: render what we have, labeled
       }
-      await rebuild(deviceLog);
+      await rebuild(deviceLog, box);
     },
     [transport, rebuild],
   );
@@ -82,11 +90,12 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const deviceLog = await openDeviceLog();
+      const [deviceLog, box] = await Promise.all([openDeviceLog(), openOutbox()]);
       if (cancelled) return;
       setLog(deviceLog);
-      await rebuild(deviceLog); // cache paints first
-      await sync(deviceLog); // network never blocks first paint
+      setOutbox(box);
+      await rebuild(deviceLog, box); // cache paints first
+      await sync(deviceLog, box); // network never blocks first paint
     })();
     return () => {
       cancelled = true;
@@ -94,9 +103,9 @@ export default function App() {
   }, [rebuild, sync]);
 
   const flowDeps = useCallback((): DecisionFlowDeps | null => {
-    if (!log) return null;
-    return { log, transport, factory: factoryDeps, userId: USER_ID };
-  }, [log, transport]);
+    if (!log || !outbox) return null;
+    return { log, outbox, transport, factory: factoryDeps, userId: USER_ID };
+  }, [log, outbox, transport]);
 
   const onCheck = useCallback(async () => {
     const deps = flowDeps();
@@ -115,13 +124,13 @@ export default function App() {
     } finally {
       setChecking(false);
     }
-    if (log) await rebuild(log);
+    if (log && outbox) await rebuild(log, outbox);
     if (result) {
       // beat 2: richer prose arrives when it arrives; template stands otherwise
       const better = await enhanceExplanation(deps, result.record);
       if (better) setEnhanced(better);
     }
-  }, [flowDeps, amountText, descriptionText, log, rebuild]);
+  }, [flowDeps, amountText, descriptionText, log, outbox, rebuild]);
 
   const onFeedback = useCallback(
     async (response: "accepted" | "ignored") => {
@@ -134,7 +143,7 @@ export default function App() {
   );
 
   const addDemoAccount = useCallback(async () => {
-    if (!log) return;
+    if (!log || !outbox) return;
     const nowIso = factoryDeps.nowIso();
     const events = [
       accountUpserted(factoryDeps, {
@@ -171,21 +180,17 @@ export default function App() {
         categorySource: "user",
       }),
     ];
-    try {
-      await pushUserEvents(transport, log, USER_ID, events);
-      setOffline(false);
-    } catch {
-      setOffline(true);
-    }
-    await rebuild(log);
-  }, [log, transport, rebuild]);
+    const result = await sendOrQueue(transport, log, outbox!, USER_ID, events);
+    setOffline(result.status === "queued");
+    await rebuild(log, outbox!);
+  }, [log, outbox, transport, rebuild]);
 
   const onRefresh = useCallback(async () => {
-    if (!log) return;
+    if (!log || !outbox) return;
     setRefreshing(true);
-    await sync(log);
+    await sync(log, outbox);
     setRefreshing(false);
-  }, [log, sync]);
+  }, [log, outbox, sync]);
 
   if (!vm) {
     return (
@@ -217,6 +222,7 @@ export default function App() {
           <HomeScreen
             vm={vm}
             offline={offline}
+            pendingCount={pendingCount}
             refreshing={refreshing}
             onRefresh={onRefresh}
             onSeeAll={() => setTab("transactions")}

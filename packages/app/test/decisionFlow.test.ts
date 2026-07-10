@@ -15,6 +15,7 @@ import {
 } from "@xerebro/server";
 import type { EventEnvelope } from "@xerebro/engines";
 import { InMemoryDeviceLog } from "../src/data/deviceLog";
+import { InMemoryOutbox } from "../src/data/outbox";
 import type { SyncTransport } from "../src/data/syncClient";
 import { pushUserEvents } from "../src/data/syncClient";
 import {
@@ -93,6 +94,7 @@ async function seedManualAccount(flow: DecisionFlowDeps, openingMinor = 500_000)
 function makeFlow(transport: SyncTransport): DecisionFlowDeps {
   return {
     log: new InMemoryDeviceLog(),
+    outbox: new InMemoryOutbox(),
     transport,
     factory: factory("device-a"),
     userId: "user-1",
@@ -113,7 +115,7 @@ describe("runPurchaseCheck", () => {
     expect(result.manualDataOnly).toBe(true);
     expect(result.explanation).toMatch(/^Yes — you can afford the flight \(\$600\.00\)/);
     expect(result.record.decision.inputsSnapshot.description).toBe("flight"); // audit keeps the context
-    expect(result.recordPersisted).toBe(true);
+    expect(result.recordStatus).toBe("synced");
 
     // The audit record reached the server log, reconstructable by retrieval.
     const serverEvents = await deps.events.eventsSince("user-1", 0);
@@ -238,7 +240,7 @@ describe("runPurchaseCheck", () => {
     expect(result.explanation).toContain("can't verify");
     expect(result.explanation).toContain("40h ago");
     expect(result.record.decision.decision).toBeTruthy(); // decision still computed
-    expect(result.recordPersisted).toBe(true); // CANT_VERIFY answers are audited too
+    expect(result.recordStatus).toBe("synced"); // CANT_VERIFY answers are audited too
   });
 
   it("submitFeedback lands a FeedbackSubmitted event in the server log", async () => {

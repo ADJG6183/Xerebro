@@ -5,6 +5,7 @@
  */
 import type { EventEnvelope } from "@xerebro/engines";
 import type { DeviceEventLog } from "./deviceLog";
+import type { Outbox } from "./outbox";
 
 export interface SyncTransport {
   getEventsSince(
@@ -58,4 +59,55 @@ export async function pushUserEvents(
 ): Promise<PullResult> {
   await transport.postEvents(userId, events);
   return pullOnce(transport, log, userId);
+}
+
+export interface SubmitResult {
+  /** "synced" = on the server now; "queued" = durable locally, flushes later. */
+  status: "synced" | "queued";
+}
+
+/**
+ * The offline-safe write path: queue first (durable), then try to flush.
+ * A dead network downgrades the result to "queued" — the action is never
+ * lost, and the UI can render it optimistically via withPending().
+ */
+export async function sendOrQueue(
+  transport: SyncTransport,
+  log: DeviceEventLog,
+  outbox: Outbox,
+  userId: string,
+  events: readonly Omit<EventEnvelope, "sequence">[],
+): Promise<SubmitResult> {
+  await outbox.enqueue(events);
+  const flushed = await flushOutbox(transport, log, outbox, userId);
+  return { status: flushed.pending === 0 ? "synced" : "queued" };
+}
+
+export interface FlushResult {
+  flushed: number;
+  pending: number;
+}
+
+/**
+ * Drain the outbox: one POST for the whole queue (server-side batch key +
+ * producer idempotency keys make retries after ambiguous failures safe),
+ * dequeue on success, then pull so the log holds the server-sequenced
+ * versions. On any network failure everything simply stays queued.
+ */
+export async function flushOutbox(
+  transport: SyncTransport,
+  log: DeviceEventLog,
+  outbox: Outbox,
+  userId: string,
+): Promise<FlushResult> {
+  const queued = await outbox.all();
+  if (queued.length === 0) return { flushed: 0, pending: 0 };
+  try {
+    await transport.postEvents(userId, queued);
+    await outbox.remove(queued.map((e) => e.idempotencyKey));
+    await pullOnce(transport, log, userId);
+    return { flushed: queued.length, pending: await outbox.size() };
+  } catch {
+    return { flushed: 0, pending: queued.length };
+  }
 }

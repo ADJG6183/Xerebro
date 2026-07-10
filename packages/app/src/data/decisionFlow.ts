@@ -11,9 +11,8 @@
  *  - The decision ALWAYS renders, verified or not — verification decides how
  *    it's labeled, never whether the user is left hanging (performanceBudget).
  *  - The audit record is pushed as a RecommendationRecorded user event
- *    (EventArchitecture.md provenance rule). Known debt: if the push fails
- *    offline there is no outbox yet — the record returns to the caller but
- *    isn't durable; outbox is scheduled with the persistence milestone.
+ *    (EventArchitecture.md provenance rule), through the outbox: durable
+ *    locally even fully offline, flushed with producer-idempotent retries.
  */
 import {
   buildRecommendationRecord,
@@ -35,7 +34,8 @@ import {
   type TransactionEvent,
 } from "@xerebro/engines";
 import type { DeviceEventLog } from "./deviceLog";
-import { pullOnce, pushUserEvents, type SyncTransport } from "./syncClient";
+import type { Outbox } from "./outbox";
+import { pullOnce, sendOrQueue, type SyncTransport } from "./syncClient";
 import { makeUserEvent, type EventFactoryDeps } from "./userEvents";
 
 const TRANSACTION_TYPES = new Set([
@@ -47,6 +47,7 @@ const TRANSACTION_TYPES = new Set([
 
 export interface DecisionFlowDeps {
   log: DeviceEventLog;
+  outbox: Outbox;
   transport: SyncTransport;
   factory: EventFactoryDeps;
   userId: string;
@@ -60,7 +61,9 @@ export interface PurchaseCheckResult {
   manualDataOnly: boolean;
   /** True when sync/refresh could not reach the server. */
   offline: boolean;
-  recordPersisted: boolean;
+  /** "synced" = audit record on the server; "queued" = durable in the
+   * outbox, flushes when the network returns. Never lost either way. */
+  recordStatus: "synced" | "queued";
 }
 
 export async function runPurchaseCheck(
@@ -119,22 +122,19 @@ export async function runPurchaseCheck(
     templateExplanation: explanation,
   });
 
-  let recordPersisted = false;
-  try {
-    await pushUserEvents(deps.transport, deps.log, deps.userId, [
-      makeUserEvent(deps.factory, "RecommendationRecorded", record, `rec:${record.recommendationId}`),
-    ]);
-    recordPersisted = true;
-  } catch {
-    offline = true;
-  }
+  // The audit record is durable BEFORE anything renders (SystemInvariants.md):
+  // queued in the outbox always, synced now if the network cooperates.
+  const submit = await sendOrQueue(deps.transport, deps.log, deps.outbox, deps.userId, [
+    makeUserEvent(deps.factory, "RecommendationRecorded", record, `rec:${record.recommendationId}`),
+  ]);
+  if (submit.status === "queued") offline = true;
 
   return {
     record,
     explanation,
     manualDataOnly: snapshot.manualDataOnly,
     offline,
-    recordPersisted,
+    recordStatus: submit.status,
   };
 }
 
@@ -164,7 +164,7 @@ export async function enhanceExplanation(
     });
     if (!checkFaithfulness(res.text, record.decision).faithful) return null;
 
-    await pushUserEvents(deps.transport, deps.log, deps.userId, [
+    await sendOrQueue(deps.transport, deps.log, deps.outbox, deps.userId, [
       makeUserEvent(
         deps.factory,
         "RecommendationExplanationAdded",
@@ -186,24 +186,21 @@ export async function enhanceExplanation(
   }
 }
 
+/** Returns true when the feedback is durable (synced OR queued for flush). */
 export async function submitFeedback(
   deps: DecisionFlowDeps,
   recommendationId: string,
   response: "accepted" | "ignored" | "rejected",
 ): Promise<boolean> {
-  try {
-    await pushUserEvents(deps.transport, deps.log, deps.userId, [
-      makeUserEvent(
-        deps.factory,
-        "FeedbackSubmitted",
-        { recommendationId, response, createdAt: deps.factory.nowIso() },
-        `feedback:${recommendationId}`,
-      ),
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
+  await sendOrQueue(deps.transport, deps.log, deps.outbox, deps.userId, [
+    makeUserEvent(
+      deps.factory,
+      "FeedbackSubmitted",
+      { recommendationId, response, createdAt: deps.factory.nowIso() },
+      `feedback:${recommendationId}`,
+    ),
+  ]);
+  return true;
 }
 
 async function computeSnapshot(log: DeviceEventLog, nowIso: string) {

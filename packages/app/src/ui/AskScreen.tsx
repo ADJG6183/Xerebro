@@ -100,9 +100,9 @@ export function AskScreen(props: {
             {answer.manualDataOnly && (
               <Text style={styles.metaLine}>Based on your manually entered data</Text>
             )}
-            {!answer.recordPersisted && (
+            {answer.recordStatus === "queued" && (
               <Text style={[styles.metaLine, { color: theme.amber }]}>
-                Offline — this answer isn't saved to your history yet
+                Saved on this device — syncs when you're back online
               </Text>
             )}
           </View>

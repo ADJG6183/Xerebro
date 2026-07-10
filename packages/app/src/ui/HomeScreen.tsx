@@ -12,6 +12,8 @@ import { theme } from "./theme";
 export function HomeScreen(props: {
   vm: DashboardViewModel;
   offline: boolean;
+  /** Queued writes waiting for the network (outbox). */
+  pendingCount: number;
   refreshing: boolean;
   onRefresh: () => void;
   onSeeAll: () => void;
@@ -27,6 +29,11 @@ export function HomeScreen(props: {
       <Text style={styles.greeting}>Good morning 👋</Text>
       <Text style={styles.subtitle}>Here's your financial overview</Text>
       {props.offline && <Text style={styles.offline}>Offline — showing saved data</Text>}
+      {props.pendingCount > 0 && (
+        <Text style={styles.offline}>
+          {props.pendingCount} change{props.pendingCount === 1 ? "" : "s"} will sync when online
+        </Text>
+      )}
 
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available Cash</Text>
