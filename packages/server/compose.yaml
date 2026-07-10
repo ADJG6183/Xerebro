@@ -5,7 +5,9 @@ services:
   db:
     image: postgres:17-alpine
     ports:
-      - "5433:5432"
+      # Loopback-only: the database must never be reachable from the LAN —
+      # it carries financial data and dev credentials (SecurityPrivacy.md).
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: xerebro
       POSTGRES_PASSWORD: xerebro_dev

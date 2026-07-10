@@ -4,7 +4,7 @@
  * app with fakes at the seams.
  */
 import Fastify, { type FastifyInstance } from "fastify";
-import type { EventStore, UnsequencedEvent } from "./eventStore";
+import type { UnsequencedEvent } from "./eventStore";
 import {
   explainDecision,
   UnfaithfulExplanationError,
@@ -118,8 +118,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       if (!userId) return reply.code(400).send({ error: "userId required" });
       const events = await deps.events.eventsSince(
         userId,
-        Number.parseInt(since, 10) || 0,
-        Math.min(Number.parseInt(limit, 10) || 500, 500),
+        Math.max(0, Number.parseInt(since, 10) || 0),
+        Math.min(Math.max(1, Number.parseInt(limit, 10) || 500), 500),
       );
       return reply.send({ events, lastSequence: await deps.events.lastSequence(userId) });
     },

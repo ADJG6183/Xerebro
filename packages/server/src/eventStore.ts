@@ -68,7 +68,10 @@ export class InMemoryEventStore implements EventStore {
   async eventsSince(userId: string, since: number, limit = 500): Promise<EventEnvelope[]> {
     const log = this.logs.get(userId) ?? [];
     // sequence is gapless and 1-based, so `since` is also an index offset.
-    return log.slice(since, since + limit);
+    // Clamp: a negative `since` must mean "from the beginning" exactly as it
+    // does in the Postgres adapter (WHERE sequence > $2) — contract-tested.
+    const from = Math.max(0, since);
+    return log.slice(from, from + limit);
   }
 
   async lastSequence(userId: string): Promise<number> {

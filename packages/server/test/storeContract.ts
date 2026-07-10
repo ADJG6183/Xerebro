@@ -67,6 +67,13 @@ export function eventStoreContract(name: string, make: () => Promise<EventStore>
       expect(await store.eventsSince("u1", 4)).toEqual([]);
     });
 
+    it("negative `since` means 'from the beginning' — identically in every implementation", async () => {
+      const store = await make();
+      await store.appendBatch("u1", [event(1), event(2), event(3)], "b1");
+      const negative = await store.eventsSince("u1", -5);
+      expect(negative.map((e) => e.sequence)).toEqual([1, 2, 3]);
+    });
+
     it("concurrent appends for one user stay gapless (the FOR UPDATE guarantee)", async () => {
       const store = await make();
       await Promise.all(
