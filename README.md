@@ -20,7 +20,11 @@ npm test                         # all packages
 Run the app against the dev server:
 
 ```bash
-# terminal 1 — API on :3000 (in-memory, resets on restart)
+# once: start durable storage (Docker Desktop must be running)
+npm run db:up -w @xerebro/server
+
+# terminal 1 — API on :3000 (durable when DATABASE_URL is in packages/server/.env,
+# see .env.example; otherwise in-memory and wiped on restart)
 npm run dev -w @xerebro/server
 
 # optional: enable AI explanations (otherwise template explanations are used)

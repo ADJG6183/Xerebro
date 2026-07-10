@@ -1,0 +1,22 @@
+# Dev Postgres (docs/adr/ADR-002-stack.md). Port 5433 to avoid clashing with
+# any system Postgres. Data survives restarts in the named volume.
+#   npm run db:up -w @xerebro/server
+services:
+  db:
+    image: postgres:17-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: xerebro
+      POSTGRES_PASSWORD: xerebro_dev
+      POSTGRES_DB: xerebro
+    volumes:
+      - xerebro-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xerebro -d xerebro"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+volumes:
+  xerebro-pgdata:
