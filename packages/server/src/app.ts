@@ -3,6 +3,7 @@
  * and the sync spine. Everything is dependency-injected so tests run the real
  * app with fakes at the seams.
  */
+import { validateEventPayload } from "@xerebro/engines";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { UnsequencedEvent } from "./eventStore";
 import {
@@ -137,6 +138,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           .code(400)
           .send({ error: "device events must have source 'user', eventId, type, idempotencyKey" });
       }
+    }
+    // Poison-pill defense (engines/validation.ts): the log is append-only,
+    // so malformed payloads are rejected AT THE DOOR — whole batch, atomically
+    // (a producer's batch is one intent; half-applying it corrupts the story).
+    const violations = events.flatMap((e) =>
+      validateEventPayload(e.type, e.payload).map((v) => `${e.eventId}: ${v}`),
+    );
+    if (violations.length > 0) {
+      return reply.code(400).send({ error: "invalid event payloads", violations });
     }
     const batchKey = `device:${userId}:${events.map((e) => e.idempotencyKey).join(",")}`;
     const result = await deps.events.appendBatch(userId, events, batchKey);

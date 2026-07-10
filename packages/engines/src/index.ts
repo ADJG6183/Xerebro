@@ -5,6 +5,7 @@ export * from "./projection/accounts";
 export * from "./projection/plans";
 export * from "./explanation/template";
 export * from "./explanation/faithfulness";
+export * from "./validation";
 export * from "./state/financialState";
 export * from "./decision/purchaseApproval";
 export * from "./verification/confidence";

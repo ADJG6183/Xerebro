@@ -87,7 +87,9 @@ describe("transaction fold (ADR-003 reference implementation)", () => {
     expect(projection.transactions.size).toBe(0);
   });
 
-  it("rejects float amounts (money invariant)", () => {
-    expect(() => applyEvent(emptyProjection(), posted("txn-f", 10.5, 1))).toThrow(TypeError);
+  it("float amounts are skipped with a warning, never folded and never thrown (money invariant + poison-pill defense)", () => {
+    const projection = applyEvent(emptyProjection(), posted("txn-f", 10.5, 1));
+    expect(projection.transactions.size).toBe(0);
+    expect(projection.warnings[0]).toContain("skipped malformed");
   });
 });

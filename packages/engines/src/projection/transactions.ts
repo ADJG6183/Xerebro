@@ -13,7 +13,7 @@
  *  - updates/annotations for unknown txnIds are recorded as warnings, not errors
  */
 import type { TransactionEvent, TransactionPostedPayload } from "../events";
-import { assertMinorUnits } from "../money";
+import { validateEventPayload } from "../validation";
 
 export interface TransactionRow extends TransactionPostedPayload {
   removed: boolean;
@@ -59,10 +59,19 @@ export function applyEvent(
   const warnings = [...projection.warnings];
   const lastSequence = Math.max(projection.lastSequence, event.sequence);
 
+  // Poison-pill defense (validation.ts): the log is append-only, so a
+  // malformed event that got past the door must NEVER brick the fold —
+  // skip it, record why, keep reading. Throwing here would make one bad
+  // page crash every reader forever.
+  const invalid = validateEventPayload(event.type, event.payload);
+  if (invalid.length > 0) {
+    warnings.push(`skipped malformed ${event.eventId} (seq ${event.sequence}): ${invalid[0]}`);
+    return { transactions, annotations, appliedEventIds, lastSequence, warnings };
+  }
+
   switch (event.type) {
     case "TransactionPosted": {
       const p = event.payload;
-      assertMinorUnits(p.amountMinor, `txn ${p.txnId} amount`);
       if (transactions.has(p.txnId)) {
         warnings.push(`TransactionPosted for existing txnId ${p.txnId} ignored (seq ${event.sequence})`);
         break;
@@ -77,7 +86,6 @@ export function applyEvent(
         warnings.push(`TransactionUpdated for unknown txnId ${txnId} (seq ${event.sequence})`);
         break;
       }
-      if (changes.amountMinor !== undefined) assertMinorUnits(changes.amountMinor, `txn ${txnId} amount`);
       transactions.set(txnId, { ...row, ...changes, lastSequence: event.sequence });
       break;
     }

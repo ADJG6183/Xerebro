@@ -6,17 +6,21 @@
  */
 import type { EventEnvelope } from "../events";
 import type { Bill, Bucket } from "../state/financialState";
+import { validateEventPayload } from "../validation";
 
 export type BucketUpserted = EventEnvelope<"BucketUpserted", Bucket>;
 export type BillUpserted = EventEnvelope<"BillUpserted", Bill>;
 
+// Both folds skip malformed payloads (poison-pill defense, validation.ts):
+// a float allocatedMinor must never brick computeFinancialState.
+
 export function foldBuckets(events: readonly EventEnvelope[]): Bucket[] {
   const byId = new Map<string, Bucket>();
   for (const event of events) {
-    if (event.type === "BucketUpserted") {
-      const bucket = event.payload as Bucket;
-      byId.set(bucket.bucketId, { ...bucket });
-    }
+    if (event.type !== "BucketUpserted") continue;
+    if (validateEventPayload(event.type, event.payload).length > 0) continue;
+    const bucket = event.payload as Bucket;
+    byId.set(bucket.bucketId, { ...bucket });
   }
   return [...byId.values()];
 }
@@ -24,10 +28,10 @@ export function foldBuckets(events: readonly EventEnvelope[]): Bucket[] {
 export function foldBills(events: readonly EventEnvelope[]): Bill[] {
   const byId = new Map<string, Bill>();
   for (const event of events) {
-    if (event.type === "BillUpserted") {
-      const bill = event.payload as Bill;
-      byId.set(bill.billId, { ...bill });
-    }
+    if (event.type !== "BillUpserted") continue;
+    if (validateEventPayload(event.type, event.payload).length > 0) continue;
+    const bill = event.payload as Bill;
+    byId.set(bill.billId, { ...bill });
   }
   return [...byId.values()];
 }

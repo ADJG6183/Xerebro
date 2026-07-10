@@ -96,6 +96,54 @@ describe("HTTP surface (real app, fake seams)", () => {
     expect(resend.json()).toMatchObject({ appended: [], lastSequence: 1 });
   });
 
+  it("rejects poison payloads at the door: float money → 400, nothing appended", async () => {
+    const deps = await makeDeps({});
+    const app = buildApp(deps);
+    const res = await app.inject({
+      method: "POST",
+      url: "/events",
+      payload: {
+        userId: "user-1",
+        events: [
+          {
+            eventId: "ok-1", type: "TransactionAnnotated", schemaVersion: 1,
+            occurredAt: "2026-07-10T10:00:00.000Z", source: "user", idempotencyKey: "k-ok",
+            payload: { txnId: "t1", categoryOverride: "Coffee" },
+          },
+          {
+            eventId: "bad-1", type: "TransactionPosted", schemaVersion: 1,
+            occurredAt: "2026-07-10T10:00:00.000Z", source: "user", idempotencyKey: "k-bad",
+            payload: { txnId: "t2", accountId: "a", amountMinor: 10.5, status: "posted", merchantRaw: "m", currency: "USD", categorySource: "user" },
+          },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().violations.join(" ")).toContain("bad-1");
+    // Atomic: the valid event in the same batch was NOT half-applied.
+    expect(await deps.events.lastSequence("user-1")).toBe(0);
+  });
+
+  it("rejects nested float money hidden inside an audit-record payload", async () => {
+    const app = buildApp(await makeDeps({}));
+    const res = await app.inject({
+      method: "POST",
+      url: "/events",
+      payload: {
+        userId: "user-1",
+        events: [
+          {
+            eventId: "rec-1", type: "RecommendationRecorded", schemaVersion: 1,
+            occurredAt: "2026-07-10T10:00:00.000Z", source: "user", idempotencyKey: "k-rec",
+            payload: { recommendationId: "r1", decision: { tradeoffs: [{ code: "x", amountMinor: 0.30000000000000004 }] } },
+          },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().violations.join(" ")).toContain("amountMinor");
+  });
+
   it("rejects device events that claim a non-user source (spoofed provenance)", async () => {
     const app = buildApp(await makeDeps({}));
     const res = await app.inject({

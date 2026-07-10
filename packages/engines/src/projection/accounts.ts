@@ -10,6 +10,7 @@
  */
 import type { EventEnvelope } from "../events";
 import type { Account } from "../state/financialState";
+import { validateEventPayload } from "../validation";
 
 export type AccountUpserted = EventEnvelope<"AccountUpserted", Account>;
 
@@ -20,7 +21,11 @@ export function isAccountUpserted(event: EventEnvelope): event is AccountUpserte
 export function foldAccounts(events: readonly EventEnvelope[]): Account[] {
   const byId = new Map<string, Account>();
   for (const event of events) {
-    if (isAccountUpserted(event)) byId.set(event.payload.accountId, { ...event.payload });
+    if (!isAccountUpserted(event)) continue;
+    // Poison-pill defense: a malformed account (float balance) must not
+    // brick downstream money math — skip it (validation.ts).
+    if (validateEventPayload(event.type, event.payload).length > 0) continue;
+    byId.set(event.payload.accountId, { ...event.payload });
   }
   return [...byId.values()];
 }
