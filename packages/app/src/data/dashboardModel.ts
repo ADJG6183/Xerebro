@@ -13,9 +13,9 @@ import {
   effectiveTransactions,
   emptyProjection,
   foldAccounts,
+  foldBills,
+  foldBuckets,
   formatMinor,
-  type Bill,
-  type Bucket,
   type EventEnvelope,
   type TransactionEvent,
 } from "@xerebro/engines";
@@ -60,16 +60,19 @@ export interface DashboardViewModel {
 
 export function buildDashboardViewModel(input: {
   events: readonly EventEnvelope[];
-  buckets?: readonly Bucket[];
-  bills?: readonly Bill[];
   /** YYYY-MM-DD in the user's timezone — injected, never read from a clock here. */
   todayLocal: string;
   /** ISO UTC "now" — injected for the data-age label. */
   nowIso: string;
 }): DashboardViewModel {
-  const { events, buckets = [], bills = [], todayLocal, nowIso } = input;
+  const { events, todayLocal, nowIso } = input;
 
+  // Everything derives from the one event log: accounts, buckets, and bills
+  // all fold from it, so the dashboard and the decision engine read exactly
+  // the same money picture (docs/adr/ADR-003-events.md).
   const accounts = foldAccounts(events);
+  const buckets = foldBuckets(events);
+  const bills = foldBills(events);
   const projection = applyEvents(
     emptyProjection(),
     events.filter((e): e is TransactionEvent => TRANSACTION_TYPES.has(e.type)),

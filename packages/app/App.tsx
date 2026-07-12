@@ -8,8 +8,10 @@
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { foldAccounts } from "@xerebro/engines";
 import { resolveApiUrl } from "./src/data/apiUrl";
 import { buildDashboardViewModel, type DashboardViewModel } from "./src/data/dashboardModel";
+import { buildPlanViewModel, type PlanViewModel } from "./src/data/planModel";
 import {
   enhanceExplanation,
   runPurchaseCheck,
@@ -25,8 +27,17 @@ import { openTokenStore } from "./src/data/openTokenStore";
 import { flushOutbox, pullOnce, sendOrQueue, type SyncTransport } from "./src/data/syncClient";
 import { withPending, type Outbox } from "./src/data/outbox";
 import { openOutbox } from "./src/data/openOutbox";
-import { accountUpserted, manualTransaction, type EventFactoryDeps } from "./src/data/userEvents";
+import {
+  accountUpserted,
+  billUpserted,
+  bucketUpserted,
+  manualTransaction,
+  type EventFactoryDeps,
+  type OutgoingEvent,
+} from "./src/data/userEvents";
+import { AddEntryScreen, type NewAccount, type NewTransaction } from "./src/ui/AddEntryScreen";
 import { AskScreen } from "./src/ui/AskScreen";
+import { BudgetScreen, type NewBill, type NewBucket } from "./src/ui/BudgetScreen";
 import { HomeScreen } from "./src/ui/HomeScreen";
 import { PlaceholderScreen } from "./src/ui/PlaceholderScreen";
 import { TabBar, type Tab } from "./src/ui/TabBar";
@@ -50,10 +61,13 @@ export default function App() {
   const [transport, setTransport] = useState<SyncTransport | null>(null);
   const [userId, setUserId] = useState("unregistered");
   const [vm, setVm] = useState<DashboardViewModel | null>(null);
+  const [planVm, setPlanVm] = useState<PlanViewModel | null>(null);
+  const [accounts, setAccounts] = useState<{ accountId: string; name: string }[]>([]);
   const [offline, setOffline] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [asking, setAsking] = useState(false);
+  const [entering, setEntering] = useState(false);
   const [amountText, setAmountText] = useState("");
   const [descriptionText, setDescriptionText] = useState("");
   const [checking, setChecking] = useState(false);
@@ -67,14 +81,28 @@ export default function App() {
     const events = withPending(await deviceLog.all(), await box.all());
     setPendingCount(await box.size());
     const now = new Date();
-    setVm(
-      buildDashboardViewModel({
-        events,
-        todayLocal: now.toISOString().slice(0, 10),
-        nowIso: now.toISOString(),
-      }),
+    const todayLocal = now.toISOString().slice(0, 10);
+    setVm(buildDashboardViewModel({ events, todayLocal, nowIso: now.toISOString() }));
+    setPlanVm(buildPlanViewModel({ events, todayLocal }));
+    setAccounts(
+      foldAccounts(events)
+        .filter((a) => a.source === "manual" && a.status === "active")
+        .map((a) => ({ accountId: a.accountId, name: a.name })),
     );
   }, []);
+
+  /** Every manual write goes through the same offline-safe path (Milestone 7)
+   * and repaints optimistically. Returns nothing — the outbox guarantees the
+   * events are durable whether or not the network was reachable. */
+  const submit = useCallback(
+    async (events: readonly OutgoingEvent[]) => {
+      if (!log || !outbox || !transport) return;
+      const result = await sendOrQueue(transport, log, outbox, events);
+      setOffline(result.status === "queued");
+      await rebuild(log, outbox);
+    },
+    [log, outbox, transport, rebuild],
+  );
 
   const sync = useCallback(
     async (t: SyncTransport, deviceLog: DeviceEventLog, box: Outbox) => {
@@ -153,48 +181,74 @@ export default function App() {
     [flowDeps, answer],
   );
 
-  const addDemoAccount = useCallback(async () => {
-    if (!log || !outbox || !transport) return;
-    const nowIso = factoryDeps.nowIso();
-    const events = [
-      accountUpserted(factoryDeps, {
-        accountId: "manual-checking",
-        type: "checking",
-        source: "manual",
-        name: "My Checking",
-        currency: "USD",
-        balanceCurrentMinor: 0,
-        balanceAsOf: nowIso,
-        status: "active",
-        openingBalanceMinor: 500_000,
-      }),
-      manualTransaction(factoryDeps, {
-        txnId: "demo-groceries",
-        accountId: "manual-checking",
-        amountMinor: -6_842,
-        currency: "USD",
-        status: "posted",
-        postedDate: nowIso.slice(0, 10),
-        merchantRaw: "Grocery Store",
-        category: "Groceries",
-        categorySource: "user",
-      }),
-      manualTransaction(factoryDeps, {
-        txnId: "demo-salary",
-        accountId: "manual-checking",
-        amountMinor: 240_000,
-        currency: "USD",
-        status: "posted",
-        postedDate: nowIso.slice(0, 10),
-        merchantRaw: "Salary",
-        category: "Income",
-        categorySource: "user",
-      }),
-    ];
-    const result = await sendOrQueue(transport!, log, outbox!, events);
-    setOffline(result.status === "queued");
-    await rebuild(log, outbox!);
-  }, [log, outbox, transport, rebuild]);
+  const onAddAccount = useCallback(
+    async (a: NewAccount) => {
+      const nowIso = factoryDeps.nowIso();
+      await submit([
+        accountUpserted(factoryDeps, {
+          accountId: factoryDeps.newId(),
+          type: "checking",
+          source: "manual",
+          name: a.name,
+          currency: "USD",
+          balanceCurrentMinor: a.openingBalanceMinor,
+          balanceAsOf: nowIso,
+          status: "active",
+          openingBalanceMinor: a.openingBalanceMinor,
+        }),
+      ]);
+      setEntering(false);
+    },
+    [submit],
+  );
+
+  const onAddTransaction = useCallback(
+    async (t: NewTransaction) => {
+      await submit([
+        manualTransaction(factoryDeps, {
+          txnId: factoryDeps.newId(),
+          accountId: t.accountId,
+          amountMinor: t.amountMinor,
+          currency: "USD",
+          status: "posted",
+          postedDate: t.postedDate,
+          merchantRaw: t.merchant,
+          ...(t.category ? { category: t.category } : {}),
+          categorySource: "user",
+        }),
+      ]);
+      setEntering(false);
+    },
+    [submit],
+  );
+
+  const onAddBucket = useCallback(
+    async (b: NewBucket) => {
+      await submit([
+        bucketUpserted(factoryDeps, {
+          bucketId: factoryDeps.newId(),
+          name: b.name,
+          allocatedMinor: b.allocatedMinor,
+          ...(b.targetMinor !== undefined ? { targetMinor: b.targetMinor } : {}),
+        }),
+      ]);
+    },
+    [submit],
+  );
+
+  const onAddBill = useCallback(
+    async (b: NewBill) => {
+      await submit([
+        billUpserted(factoryDeps, {
+          billId: factoryDeps.newId(),
+          name: b.name,
+          expectedAmountMinor: b.expectedAmountMinor,
+          nextDue: b.nextDue,
+        }),
+      ]);
+    },
+    [submit],
+  );
 
   const onRefresh = useCallback(async () => {
     if (!log || !outbox || !transport) return;
@@ -215,7 +269,15 @@ export default function App() {
     <View style={styles.root}>
       <StatusBar style="auto" />
       <View style={styles.body}>
-        {asking ? (
+        {entering ? (
+          <AddEntryScreen
+            accounts={accounts}
+            todayLocal={new Date().toISOString().slice(0, 10)}
+            onSubmitAccount={onAddAccount}
+            onSubmitTransaction={onAddTransaction}
+            onBack={() => setEntering(false)}
+          />
+        ) : asking ? (
           <AskScreen
             amountText={amountText}
             onAmountText={setAmountText}
@@ -237,15 +299,13 @@ export default function App() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             onSeeAll={() => setTab("transactions")}
-            onAddDemo={addDemoAccount}
+            onAddFirst={() => setEntering(true)}
+            onAsk={() => setAsking(true)}
           />
         ) : tab === "transactions" ? (
           <TransactionsScreen vm={vm} />
-        ) : tab === "budget" ? (
-          <PlaceholderScreen
-            title="Budget"
-            note="Buckets and paycheck planning arrive in a later milestone — designed in docs/V1Scope.md, not yet built."
-          />
+        ) : tab === "budget" && planVm ? (
+          <BudgetScreen vm={planVm} onAddBucket={onAddBucket} onAddBill={onAddBill} />
         ) : (
           <PlaceholderScreen
             title="Reports"
@@ -253,14 +313,14 @@ export default function App() {
           />
         )}
       </View>
-      {!asking && (
+      {!asking && !entering && (
         <TabBar
           active={tab}
           onTab={(t) => {
             setTab(t);
             setAsking(false);
           }}
-          onAsk={() => setAsking(true)}
+          onAsk={() => setEntering(true)}
         />
       )}
     </View>

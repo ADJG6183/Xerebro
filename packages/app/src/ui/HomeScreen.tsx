@@ -5,6 +5,7 @@
  * every displayed number carries a knowable data age (SystemInvariants.md).
  */
 import { ScrollView, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import type { DashboardViewModel } from "../data/dashboardModel";
 import { StatTile, TxnRow } from "./bits";
 import { theme } from "./theme";
@@ -17,7 +18,8 @@ export function HomeScreen(props: {
   refreshing: boolean;
   onRefresh: () => void;
   onSeeAll: () => void;
-  onAddDemo: () => void;
+  onAddFirst: () => void;
+  onAsk: () => void;
 }) {
   const { vm } = props;
   return (
@@ -43,6 +45,17 @@ export function HomeScreen(props: {
 
       {vm.hasAccounts ? (
         <>
+          <Pressable style={styles.askCard} onPress={props.onAsk}>
+            <View style={styles.askIcon}>
+              <Ionicons name="sparkles" size={18} color={theme.onPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.askTitle}>Can I buy this?</Text>
+              <Text style={styles.askSub}>Check a purchase against your real numbers</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.primary} />
+          </Pressable>
+
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Quick Overview</Text>
             <Text style={styles.sectionMeta}>This Month</Text>
@@ -65,8 +78,8 @@ export function HomeScreen(props: {
           </View>
         </>
       ) : (
-        <Pressable style={styles.cta} onPress={props.onAddDemo}>
-          <Text style={styles.ctaText}>Add demo checking account</Text>
+        <Pressable style={styles.cta} onPress={props.onAddFirst}>
+          <Text style={styles.ctaText}>Add your first account</Text>
         </Pressable>
       )}
     </ScrollView>
@@ -88,6 +101,27 @@ const styles = StyleSheet.create({
   balanceLabel: { color: theme.onPrimaryFaint, fontSize: 13 },
   balanceValue: { color: theme.onPrimary, fontSize: 36, fontWeight: "800", marginVertical: 4 },
   balanceAge: { color: theme.onPrimaryFaint, fontSize: 12 },
+  askCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: theme.card,
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: theme.divider,
+  },
+  askIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: theme.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  askTitle: { fontSize: 15, fontWeight: "700", color: theme.ink },
+  askSub: { fontSize: 12, color: theme.slate, marginTop: 2 },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
