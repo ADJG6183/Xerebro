@@ -4,6 +4,7 @@
  */
 import { useMemo, useState } from "react";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import type { DashboardViewModel } from "../data/dashboardModel";
 import { TxnRow } from "./bits";
 import { theme } from "./theme";
@@ -15,7 +16,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "expense", label: "Expense" },
 ];
 
-export function TransactionsScreen({ vm }: { vm: DashboardViewModel }) {
+export function TransactionsScreen({ vm, onAdd }: { vm: DashboardViewModel; onAdd: () => void }) {
   const [filter, setFilter] = useState<Filter>("all");
 
   const sections = useMemo(
@@ -34,7 +35,13 @@ export function TransactionsScreen({ vm }: { vm: DashboardViewModel }) {
 
   return (
     <View style={styles.screen}>
-      <Text style={styles.title}>Transactions</Text>
+      <View style={styles.header}>
+        <View style={styles.headerSpacer} />
+        <Text style={styles.title}>Transactions</Text>
+        <Pressable style={styles.addBtn} onPress={onAdd} hitSlop={8}>
+          <Ionicons name="add" size={22} color={theme.primary} />
+        </Pressable>
+      </View>
       <View style={styles.chips}>
         {FILTERS.map((f) => (
           <Pressable
@@ -65,7 +72,22 @@ export function TransactionsScreen({ vm }: { vm: DashboardViewModel }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.bg, paddingTop: 72, paddingHorizontal: 20 },
-  title: { fontSize: 20, fontWeight: "800", color: theme.ink, marginBottom: 14, textAlign: "center" },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+  headerSpacer: { width: 34 },
+  title: { fontSize: 20, fontWeight: "800", color: theme.ink, textAlign: "center" },
+  addBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.chipBg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   chips: { flexDirection: "row", gap: 8, marginBottom: 8 },
   chip: {
     paddingVertical: 8,

@@ -37,6 +37,7 @@ import {
 } from "./src/data/userEvents";
 import { AddEntryScreen, type NewAccount, type NewTransaction } from "./src/ui/AddEntryScreen";
 import { AskScreen } from "./src/ui/AskScreen";
+import { ChatScreen } from "./src/ui/ChatScreen";
 import { BudgetScreen, type NewBill, type NewBucket } from "./src/ui/BudgetScreen";
 import { HomeScreen } from "./src/ui/HomeScreen";
 import { PlaceholderScreen } from "./src/ui/PlaceholderScreen";
@@ -68,6 +69,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("home");
   const [asking, setAsking] = useState(false);
   const [entering, setEntering] = useState(false);
+  const [chatting, setChatting] = useState(false);
   const [amountText, setAmountText] = useState("");
   const [descriptionText, setDescriptionText] = useState("");
   const [checking, setChecking] = useState(false);
@@ -269,7 +271,9 @@ export default function App() {
     <View style={styles.root}>
       <StatusBar style="auto" />
       <View style={styles.body}>
-        {entering ? (
+        {chatting && transport ? (
+          <ChatScreen transport={transport} onBack={() => setChatting(false)} />
+        ) : entering ? (
           <AddEntryScreen
             accounts={accounts}
             todayLocal={new Date().toISOString().slice(0, 10)}
@@ -303,7 +307,7 @@ export default function App() {
             onAsk={() => setAsking(true)}
           />
         ) : tab === "transactions" ? (
-          <TransactionsScreen vm={vm} />
+          <TransactionsScreen vm={vm} onAdd={() => setEntering(true)} />
         ) : tab === "budget" && planVm ? (
           <BudgetScreen vm={planVm} onAddBucket={onAddBucket} onAddBill={onAddBill} />
         ) : (
@@ -313,14 +317,14 @@ export default function App() {
           />
         )}
       </View>
-      {!asking && !entering && (
+      {!asking && !entering && !chatting && (
         <TabBar
           active={tab}
           onTab={(t) => {
             setTab(t);
             setAsking(false);
           }}
-          onAsk={() => setEntering(true)}
+          onAsk={() => setChatting(true)}
         />
       )}
     </View>

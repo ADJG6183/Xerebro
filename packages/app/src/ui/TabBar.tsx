@@ -1,9 +1,10 @@
 /**
  * Bottom tab bar per docs/uiDesign/image2.png: Home · Transactions · [FAB]
- * · Budget · Reports. Deliberate deviation, recorded in V1Scope.md terms:
- * the mockup's center "+" adds a transaction; ours opens "Can I buy this?" —
- * the decision engine is the product's differentiator and earns the primary
- * action. Budget/Reports render placeholders until their milestones.
+ * · Budget · Reports. Deliberate deviation: the mockup's center "+" adds a
+ * transaction (that moved to the Transactions screen); ours opens the Copilot
+ * chat (docs/copilotArchitecture.md) — the conversational assistant is the
+ * product's differentiator and earns the primary action. "Can I buy this?"
+ * lives on the Home hero card. Reports renders a placeholder until its milestone.
  */
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";

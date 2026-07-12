@@ -8,6 +8,7 @@
  * boundary). A client that could name its user could name anyone's.
  */
 import type { EventEnvelope } from "@xerebro/engines";
+import type { CopilotAnswer } from "./chat";
 import type { DeviceEventLog } from "./deviceLog";
 import type { Outbox } from "./outbox";
 
@@ -25,6 +26,8 @@ export interface SyncTransport {
     model: string;
     promptTemplateVersion: string;
   }>;
+  /** Copilot chat via the server (docs/copilotArchitecture.md). */
+  chat?(question: string, todayLocal: string): Promise<CopilotAnswer>;
 }
 
 export interface PullResult {

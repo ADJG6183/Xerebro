@@ -38,6 +38,7 @@ The backend LLM proxy is the **only** path to any LLM provider, and it enforces 
 | User's question text (post intent-detection) | Name, email, address, phone, any direct identifier |
 | Data-age / verification status labels | Voice audio or full transcripts |
 
+- **Copilot chat** (docs/copilotArchitecture.md) sends the same allowlist and nothing more: the user's question text and *computed aggregates* from engine tools. Raw transactions are never embedded, retrieved, or sent — the assistant answers from deterministic computations, not from rows in the model's context.
 - **Zero-data-retention API terms with the provider (OpenAI) are a launch prerequisite.** No training on our data, no retention beyond transient processing. If terms change, the proxy blocks until renegotiated.
 - Provider swap is a proxy-level change (ADR-002) plus an eval rerun.
 

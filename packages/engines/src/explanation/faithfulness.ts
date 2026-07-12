@@ -15,11 +15,28 @@ import type { PurchaseDecision } from "../decision/purchaseApproval";
 
 const MONEY_FIGURE = /\$\s?([\d,]+(?:\.\d{1,2})?)/g;
 
+/** Normalized dollar strings (no "$", no spaces) appearing in text. */
+export function moneyFiguresIn(text: string): string[] {
+  return [...text.matchAll(MONEY_FIGURE)].map((m) => m[1]!.replace(/\s/g, ""));
+}
+
+/** The dollar strings a set of minor-unit values legitimizes (with and
+ * without cents, since a model may round to whole dollars). */
+export function legalFiguresFromMinor(values: readonly number[]): Set<string> {
+  const legal = new Set<string>();
+  for (const v of values) {
+    const formatted = formatMinor(Math.abs(v)).slice(1); // "1,234.56"
+    legal.add(formatted);
+    legal.add(formatted.replace(/\.\d{2}$/, "")); // "1,234"
+  }
+  return legal;
+}
+
 /** Every dollar string an explanation is allowed to contain. */
 export function legalMoneyFigures(decision: PurchaseDecision): Set<string> {
   const s = decision.inputsSnapshot;
   const remaining = s.availableCashMinor - s.upcomingObligationsMinor - s.amountMinor;
-  const values = [
+  return legalFiguresFromMinor([
     s.amountMinor,
     s.availableCashMinor,
     s.upcomingObligationsMinor,
@@ -27,14 +44,19 @@ export function legalMoneyFigures(decision: PurchaseDecision): Set<string> {
     remaining,
     -remaining,
     ...decision.tradeoffs.map((t) => t.amountMinor).filter((v): v is number => v !== undefined),
-  ];
-  const legal = new Set<string>();
-  for (const v of values) {
-    const formatted = formatMinor(Math.abs(v)).slice(1); // "1,234.56"
-    legal.add(formatted);
-    legal.add(formatted.replace(/\.\d{2}$/, "")); // "1,234" (model may round to whole dollars)
-  }
-  return legal;
+  ]);
+}
+
+/**
+ * Chat faithfulness (docs/copilotArchitecture.md): a copilot answer may only
+ * contain money figures the tool actually computed. Same leash, no verdict.
+ */
+export function checkChatFaithful(text: string, figures: readonly number[]): FaithfulnessResult {
+  const legal = legalFiguresFromMinor(figures);
+  const violations = moneyFiguresIn(text)
+    .filter((f) => !legal.has(f))
+    .map((f) => `money figure not computed by any tool: $${f}`);
+  return { faithful: violations.length === 0, violations };
 }
 
 const VERDICT_FORBIDDEN: Record<PurchaseDecision["decision"], RegExp[]> = {
@@ -55,8 +77,7 @@ export function checkFaithfulness(
   const violations: string[] = [];
 
   const legal = legalMoneyFigures(decision);
-  for (const match of text.matchAll(MONEY_FIGURE)) {
-    const normalized = match[1]!.replace(/\s/g, "");
+  for (const normalized of moneyFiguresIn(text)) {
     if (!legal.has(normalized)) {
       violations.push(`money figure not in decision payload: $${normalized}`);
     }

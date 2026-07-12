@@ -43,6 +43,13 @@ Response                    (decision + explanation + data age + "why" inspector
 
 Speech-to-text on-device. NLU extraction produces a **draft card** `{ goal, amount, timeframe, confidence }`; only an explicit user tap commits it as SQL facts (then it's user-verified data, not model output). The raw transcript goes to vector memory as context regardless. Auto-commit at any confidence is forbidden — see the confirm-before-commit decision in the plan of record.
 
+## Copilot (chat)
+
+The conversational assistant on the FAB follows this same pipeline with a chat
+doorway: the LLM routes a question to a deterministic engine tool and phrases
+its computed result — never computing numbers itself. Full design:
+docs/copilotArchitecture.md.
+
 ## Hard rules
 
 - The LLM never performs financial calculations.

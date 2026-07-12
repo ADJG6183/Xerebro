@@ -103,5 +103,14 @@ export function authedHttpTransport(
         promptTemplateVersion: string;
       };
     },
+    async chat(question, todayLocal) {
+      const res = await fetchAuthed(`/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question, todayLocal }),
+      });
+      if (!res.ok) throw new Error(`chat failed: HTTP ${res.status}`);
+      return (await res.json()) as import("./chat").CopilotAnswer;
+    },
   };
 }

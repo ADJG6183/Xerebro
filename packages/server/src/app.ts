@@ -6,6 +6,7 @@
 import { validateEventPayload } from "@xerebro/engines";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { AuthSession, AuthStore } from "./auth/store";
+import { answerQuestion } from "./copilot/chat";
 import type { UnsequencedEvent } from "./eventStore";
 import {
   explainDecision,
@@ -153,6 +154,27 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         return reply.code(422).send({ error: "unfaithful explanation discarded", violations: err.violations });
       }
       return reply.code(502).send({ error: "explanation provider failed" });
+    }
+  });
+
+  /**
+   * Copilot chat (docs/copilotArchitecture.md). Tool execution runs here over
+   * the user's own event log; only the question and computed aggregates reach
+   * the provider. Needs the LLM proxy — without it, 503 and the client shows
+   * a "chat unavailable" state (never a broken screen).
+   */
+  app.post<{ Body: { question?: string; todayLocal?: string } }>("/chat", async (request, reply) => {
+    if (!deps.llm) return reply.code(503).send({ error: "no LLM provider configured" });
+    const { userId } = sessionOf(request);
+    const { question, todayLocal } = request.body ?? {};
+    if (!question?.trim() || !todayLocal || !/^\d{4}-\d{2}-\d{2}$/.test(todayLocal)) {
+      return reply.code(400).send({ error: "question and todayLocal (YYYY-MM-DD) required" });
+    }
+    const events = await deps.events.eventsSince(userId, 0, 100_000);
+    try {
+      return reply.send(await answerQuestion(deps.llm, { question: question.trim(), events, todayLocal }));
+    } catch {
+      return reply.code(502).send({ error: "chat provider failed" });
     }
   });
 

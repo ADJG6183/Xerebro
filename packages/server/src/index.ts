@@ -6,3 +6,4 @@ export * from "./plaid/acl";
 export * from "./app";
 export * from "./llm/gateway";
 export * from "./llm/explain";
+export * from "./copilot/chat";
