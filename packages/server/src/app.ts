@@ -16,6 +16,7 @@ import {
 import type { LlmGateway } from "./llm/gateway";
 import { syncPlaidItem, type AclDeps } from "./plaid/acl";
 import { syncPlaidBalances } from "./plaid/balances";
+import { classifyAggregatorError } from "./plaid/errors";
 import type { PlaidLinkGateway } from "./plaid/gateway";
 
 /**
@@ -177,8 +178,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       const transactions = await syncPlaidItem(deps, itemId);
       // NOTE: itemId only — the access token is never returned to the device.
       return reply.send({ itemId, balances, transactions });
-    } catch {
-      return reply.code(502).send({ error: "could not link bank" });
+    } catch (err) {
+      const failure = classifyAggregatorError(err);
+      return reply.code(502).send({ error: "could not link bank", failure });
     }
   });
 
@@ -201,8 +203,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       await syncPlaidBalances(deps, request.params.itemId);
       const outcome = await syncPlaidItem(deps, request.params.itemId);
       return reply.send(outcome);
-    } catch {
-      return reply.code(502).send({ error: "aggregator refresh failed" });
+    } catch (err) {
+      // Semantic failure, not "something broke": the client renders
+      // userMessage and can prompt re-auth when only the user can fix it
+      // (docs/Reliability.md error classification).
+      const failure = classifyAggregatorError(err);
+      return reply.code(failure.kind === "reauth_required" ? 409 : 502).send({
+        error: "aggregator refresh failed",
+        failure,
+      });
     }
   });
 

@@ -13,7 +13,7 @@
  *  - idempotency: one fetched page = one batch keyed (itemId, cursor); the
  *    event store makes replays a no-op (docs/SystemInvariants.md).
  */
-import type { MinorUnits } from "@xerebro/engines";
+import type { CategoryConfidence, MinorUnits } from "@xerebro/engines";
 import type { UnsequencedEvent, EventStore } from "../eventStore";
 import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "./gateway";
 import type { ItemStore, PlaidItem, TxnRegistry } from "./stores";
@@ -84,6 +84,105 @@ export async function syncPlaidItem(deps: AclDeps, itemId: string): Promise<Sync
   return outcome;
 }
 
+/** Plaid's confidence vocabulary → ours. Unknown/missing degrades to
+ * "unknown", never to false certainty (docs/SystemInvariants.md). */
+function toConfidence(level: string | null | undefined): CategoryConfidence {
+  switch (level) {
+    case "VERY_HIGH":
+      return "very_high";
+    case "HIGH":
+      return "high";
+    case "MEDIUM":
+      return "medium";
+    case "LOW":
+      return "low";
+    default:
+      return "unknown";
+  }
+}
+
+/** Trim, collapse whitespace, and drop empties — real feeds send `"  "`. */
+function clean(value: string | null | undefined): string | undefined {
+  const trimmed = value?.replace(/\s+/g, " ").trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/** Only accept image URLs Plaid actually serves over https. */
+function cleanUrl(value: string | null | undefined): string | undefined {
+  const url = clean(value);
+  return url?.startsWith("https://") ? url : undefined;
+}
+
+/**
+ * Accept the aggregator's "clean" merchant name only when it's actually an
+ * improvement. Observed in real sandbox data: "SparkFun" came back as "FUN"
+ * — a truncation that is strictly WORSE than the bank's own description.
+ *
+ * Rule: keep it when it's a distinct name that isn't a bare fragment of the
+ * raw text. A name that's just a substring of the raw description adds
+ * nothing (at best) or loses information (at worst), so the raw wins.
+ */
+function usefulMerchantName(
+  candidate: string | undefined,
+  merchantRaw: string,
+): string | undefined {
+  if (!candidate || candidate === merchantRaw) return undefined;
+  const rawUpper = merchantRaw.toUpperCase();
+  const candidateUpper = candidate.toUpperCase();
+
+  // "Uber" from "Uber 063015 SF**POOL**" — a leading prefix is a clean-up.
+  if (rawUpper.startsWith(candidateUpper)) return candidate;
+
+  // Multi-word names are real merchant resolutions, never truncations:
+  // "SQ *BLUE BOTTLE" → "Blue Bottle Coffee" is exactly what we want.
+  if (/\s/.test(candidate.trim())) return candidate;
+
+  // A single word buried INSIDE the raw text is a fragment, not a name:
+  // "SparkFun" → "FUN" loses information, so the bank's text wins.
+  const glued = rawUpper.replace(/[^A-Z0-9]/g, "");
+  if (glued.includes(candidateUpper.replace(/[^A-Z0-9]/g, ""))) return undefined;
+
+  return candidate;
+}
+
+/**
+ * The ONE place Plaid's transaction fields become ours — shared by the
+ * "new transaction" and "pending became posted" paths so enrichment can
+ * never drift between them.
+ *
+ * Edge cases handled here, all observed in real aggregator data:
+ *  - `merchant_name` absent (rare merchants) → display falls back to raw;
+ *  - `merchant_name` equal to the raw description → don't store a duplicate;
+ *  - blank/whitespace strings → treated as absent, never stored as "";
+ *  - non-https or missing logo URLs → dropped;
+ *  - `iso_currency_code` null on some accounts → `unofficial_currency_code`;
+ *  - category present but low-confidence → kept WITH its confidence, so the
+ *    UI and copilot can be honest about a guess.
+ */
+function enrich(txn: PlaidTransaction) {
+  const merchantRaw = clean(txn.name) ?? "Unknown";
+  const merchantName = usefulMerchantName(clean(txn.merchant_name), merchantRaw);
+  const category = clean(txn.personal_finance_category?.primary);
+
+  return {
+    amountMinor: toMinorUnits(txn.amount),
+    merchantRaw,
+    // Storing the clean name only when it ADDS something keeps payloads
+    // small and makes "did Plaid actually resolve this merchant?" answerable.
+    ...(merchantName ? { merchantName } : {}),
+    ...(cleanUrl(txn.logo_url) ? { merchantLogoUrl: cleanUrl(txn.logo_url)! } : {}),
+    ...(category ? { category } : {}),
+    ...(clean(txn.personal_finance_category?.detailed)
+      ? { categoryDetailed: clean(txn.personal_finance_category?.detailed)! }
+      : {}),
+    // Confidence only means something alongside a category.
+    ...(category
+      ? { categoryConfidence: toConfidence(txn.personal_finance_category?.confidence_level) }
+      : {}),
+    ...(clean(txn.payment_channel) ? { paymentChannel: clean(txn.payment_channel)! } : {}),
+  };
+}
+
 async function normalizePage(
   deps: AclDeps,
   userId: string,
@@ -103,15 +202,7 @@ async function normalizePage(
       events.push(
         makeEvent(deps, "TransactionUpdated", {
           txnId: pendingId,
-          changes: {
-            status: "posted" as const,
-            amountMinor: toMinorUnits(txn.amount),
-            postedDate: txn.date,
-            merchantRaw: txn.name,
-            ...(txn.personal_finance_category?.primary
-              ? { category: txn.personal_finance_category.primary }
-              : {}),
-          },
+          changes: { status: "posted" as const, postedDate: txn.date, ...enrich(txn) },
         }),
       );
     } else {
@@ -120,16 +211,12 @@ async function normalizePage(
         makeEvent(deps, "TransactionPosted", {
           txnId: txn.transaction_id,
           accountId: txn.account_id,
-          amountMinor: toMinorUnits(txn.amount),
-          currency: txn.iso_currency_code ?? "USD",
+          currency: txn.iso_currency_code ?? txn.unofficial_currency_code ?? "USD",
           status: txn.pending ? ("pending" as const) : ("posted" as const),
           postedDate: txn.date,
           ...(txn.authorized_date ? { authorizedDate: txn.authorized_date } : {}),
-          merchantRaw: txn.name,
-          ...(txn.personal_finance_category?.primary
-            ? { category: txn.personal_finance_category.primary }
-            : {}),
           categorySource: "plaid" as const,
+          ...enrich(txn),
         }),
       );
     }
@@ -140,13 +227,8 @@ async function normalizePage(
     events.push(
       makeEvent(deps, "TransactionUpdated", {
         txnId: canonical,
-        changes: {
-          amountMinor: toMinorUnits(txn.amount),
-          merchantRaw: txn.name,
-          ...(txn.personal_finance_category?.primary
-            ? { category: txn.personal_finance_category.primary }
-            : {}),
-        },
+        // Same extractor as the added path: enrichment can't drift.
+        changes: enrich(txn),
       }),
     );
   }

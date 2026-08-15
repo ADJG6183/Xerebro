@@ -29,6 +29,7 @@ import {
 } from "@xerebro/engines";
 import type { DeviceEventLog } from "./deviceLog";
 import type { ProjectionCache } from "./projectionCache";
+import { failureOf, type AggregatorFailure } from "./aggregatorStatus";
 import type { Outbox } from "./outbox";
 import { pullOnce, sendOrQueue, type SyncTransport } from "./syncClient";
 import { makeUserEvent, type EventFactoryDeps } from "./userEvents";
@@ -55,6 +56,9 @@ export interface PurchaseCheckResult {
   /** "synced" = audit record on the server; "queued" = durable in the
    * outbox, flushes when the network returns. Never lost either way. */
   recordStatus: "synced" | "queued";
+  /** Set when a bank refresh failed for a REASON worth telling the user
+   * (docs/Reliability.md) — e.g. their bank needs a fresh sign-in. */
+  aggregatorFailure?: AggregatorFailure;
 }
 
 export async function runPurchaseCheck(
@@ -64,6 +68,7 @@ export async function runPurchaseCheck(
 ): Promise<PurchaseCheckResult> {
   const nowIso = deps.factory.nowIso();
   let offline = false;
+  let aggregatorFailure: AggregatorFailure | undefined;
 
   try {
     await pullOnce(deps.transport, deps.log);
@@ -75,8 +80,9 @@ export async function runPurchaseCheck(
 
   // Refresh-race: only aggregator accounts can be stale (manual are exempt).
   if (snapshot.aggregatorAgeSeconds > PURCHASE_FRESHNESS_WINDOW_SECONDS) {
-    const refreshed = await raceRefresh(deps, snapshot.staleItemIds);
-    if (refreshed) {
+    const race = await raceRefresh(deps, snapshot.staleItemIds);
+    if (race.failure) aggregatorFailure = race.failure;
+    if (race.refreshed) {
       try {
         await pullOnce(deps.transport, deps.log);
         snapshot = await computeSnapshot(deps, nowIso);
@@ -126,6 +132,7 @@ export async function runPurchaseCheck(
     manualDataOnly: snapshot.manualDataOnly,
     offline,
     recordStatus: submit.status,
+    ...(aggregatorFailure ? { aggregatorFailure } : {}),
   };
 }
 
@@ -233,19 +240,34 @@ async function computeSnapshot(deps: DecisionFlowDeps, nowIso: string) {
   return { state, manualDataOnly, aggregatorAgeSeconds, staleItemIds };
 }
 
-/** Fire refreshes with the doc's timeout; report whether ANY completed. */
-async function raceRefresh(deps: DecisionFlowDeps, itemIds: string[]): Promise<boolean> {
-  if (itemIds.length === 0 || deps.transport.refreshItem === undefined) return false;
+/** Fire refreshes with the doc's timeout; report whether ANY completed,
+ * and surface a classified failure when one is worth showing. */
+interface RefreshOutcome {
+  refreshed: boolean;
+  /** A CLASSIFIED failure worth telling the user about (never a timeout). */
+  failure?: AggregatorFailure;
+}
+
+async function raceRefresh(deps: DecisionFlowDeps, itemIds: string[]): Promise<RefreshOutcome> {
+  if (itemIds.length === 0 || deps.transport.refreshItem === undefined) {
+    return { refreshed: false };
+  }
   const timeoutMs = deps.refreshTimeoutMs ?? 3_000;
   const results = await Promise.all(
     itemIds.map((id) =>
       withTimeout(deps.transport.refreshItem!(id), timeoutMs).then(
-        () => true,
-        () => false,
+        () => ({ ok: true }) as const,
+        // A timeout is expected (verification degrades to CANT_VERIFY); a
+        // CLASSIFIED failure means the bank told us something actionable.
+        (err) => ({ ok: false, failure: failureOf(err) }) as const,
       ),
     ),
   );
-  return results.some(Boolean);
+  const failure = results.flatMap((r) => (r.ok ? [] : (r.failure ?? [])))[0];
+  return {
+    refreshed: results.some((r) => r.ok),
+    ...(failure ? { failure } : {}),
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

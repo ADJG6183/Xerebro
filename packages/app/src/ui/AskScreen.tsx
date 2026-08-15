@@ -105,6 +105,14 @@ export function AskScreen(props: {
                 Saved on this device — syncs when you're back online
               </Text>
             )}
+            {answer.aggregatorFailure && (
+              // Why the bank data may be stale, in words the user can act on
+              // (docs/Reliability.md) — never a silent failure.
+              <Text style={[styles.metaLine, { color: theme.amber }]}>
+                {answer.aggregatorFailure.userMessage}
+                {answer.aggregatorFailure.needsUserAction ? " Reconnect it from the Add screen." : ""}
+              </Text>
+            )}
           </View>
 
           <Text style={styles.whyTitle}>Why</Text>

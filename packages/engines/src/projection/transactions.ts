@@ -145,7 +145,11 @@ export function effectiveTransactions(
       ...(a?.categoryOverride ?? row.category
         ? { effectiveCategory: a?.categoryOverride ?? row.category }
         : {}),
-      effectiveMerchant: a?.renamedMerchant ?? row.merchantRaw,
+      // Display precedence: the user's own rename, then the aggregator's
+      // cleaned name ("Uber"), then the bank's raw description
+      // ("Uber 063015 SF**POOL**"). The raw value stays on the row as the
+      // source fact — this is display only.
+      effectiveMerchant: a?.renamedMerchant ?? row.merchantName ?? row.merchantRaw,
     });
   }
   return out;

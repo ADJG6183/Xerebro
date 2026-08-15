@@ -23,6 +23,14 @@ export interface EventEnvelope<TType extends string = string, TPayload = unknown
 export type TransactionStatus = "pending" | "posted";
 export type CategorySource = "plaid" | "model" | "user";
 
+/**
+ * How much the CATEGORY can be trusted. Aggregators guess categories, and
+ * they tell us how confident they are — a fact the doctrine requires us to
+ * keep rather than launder into false certainty (docs/SystemInvariants.md:
+ * uncertainty is shown, never hidden). Absent = unknown, treated as low.
+ */
+export type CategoryConfidence = "very_high" | "high" | "medium" | "low" | "unknown";
+
 export interface TransactionPostedPayload {
   txnId: string;
   accountId: string;
@@ -33,9 +41,20 @@ export interface TransactionPostedPayload {
   /** Local dates (YYYY-MM-DD), evaluated in the user's timezone. */
   postedDate?: string;
   authorizedDate?: string;
+  /** The bank's raw description, e.g. "Uber 063015 SF**POOL**". */
   merchantRaw: string;
+  /** The aggregator's cleaned merchant name, e.g. "Uber". Display prefers
+   * this; `merchantRaw` remains the source fact. */
+  merchantName?: string;
+  /** Merchant logo URL from the aggregator (display only). */
+  merchantLogoUrl?: string;
   category?: string;
+  /** Finer-grained category, e.g. TRANSPORTATION_TAXIS_AND_RIDE_SHARES. */
+  categoryDetailed?: string;
+  categoryConfidence?: CategoryConfidence;
   categorySource: CategorySource;
+  /** How the money moved: online, in store, ACH… (aggregator vocabulary). */
+  paymentChannel?: string;
 }
 
 /** Pending→posted arrives as an update on the SAME canonical txnId (ADR-003). */

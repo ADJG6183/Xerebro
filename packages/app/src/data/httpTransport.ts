@@ -87,7 +87,16 @@ export function authedHttpTransport(
       const res = await fetchAuthed(`/items/${encodeURIComponent(itemId)}/refresh`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error(`refresh failed: HTTP ${res.status}`);
+      if (!res.ok) {
+        // Carry the server's SEMANTIC classification on the error so callers
+        // can show why syncing failed (data/aggregatorStatus.ts).
+        const body = (await res.json().catch(() => ({}))) as { failure?: unknown };
+        const error = new Error(`refresh failed: HTTP ${res.status}`) as Error & {
+          failure?: unknown;
+        };
+        if (body.failure) error.failure = body.failure;
+        throw error;
+      }
     },
     async getExplanation(request) {
       const res = await fetchAuthed(`/explanations`, {

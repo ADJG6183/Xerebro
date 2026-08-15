@@ -23,7 +23,19 @@ export interface PlaidTransaction {
   date: string; // YYYY-MM-DD
   authorized_date: string | null;
   name: string;
-  personal_finance_category?: { primary: string } | null;
+  /** Cleaned merchant name; absent for merchants Plaid can't resolve. */
+  merchant_name?: string | null;
+  logo_url?: string | null;
+  /** Some accounts report only an unofficial currency code. */
+  unofficial_currency_code?: string | null;
+  /** online | in store | other — how the money moved. */
+  payment_channel?: string | null;
+  personal_finance_category?: {
+    primary: string;
+    detailed?: string | null;
+    /** VERY_HIGH | HIGH | MEDIUM | LOW — Plaid tells us when it's guessing. */
+    confidence_level?: string | null;
+  } | null;
 }
 
 export interface PlaidSyncPage {

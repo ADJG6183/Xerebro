@@ -57,7 +57,12 @@ describe("HTTP surface (real app, fake seams)", () => {
     const failOwner = await registerHeaders(failing);
     const bad = await failing.inject({ method: "POST", url: "/items/item-1/refresh", headers: failOwner.headers });
     expect(bad.statusCode).toBe(502);
-    expect(bad.json()).toEqual({ error: "aggregator refresh failed" });
+    // The failure is CLASSIFIED, not opaque: the client gets something it can
+    // show the user (docs/Reliability.md error classification).
+    const body = bad.json();
+    expect(body.error).toBe("aggregator refresh failed");
+    expect(body.failure).toMatchObject({ kind: "transient", retryable: true });
+    expect(body.failure.userMessage).toBeTruthy();
   });
 
   it("rejects unverified webhooks with 401", async () => {
