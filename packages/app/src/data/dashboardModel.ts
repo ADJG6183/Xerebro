@@ -8,24 +8,13 @@
  * just shows it.
  */
 import {
-  applyEvents,
+  buildSnapshot,
   computeFinancialState,
   effectiveTransactions,
-  emptyProjection,
-  foldAccounts,
-  foldBills,
-  foldBuckets,
   formatMinor,
   type EventEnvelope,
-  type TransactionEvent,
+  type ProjectionSnapshot,
 } from "@xerebro/engines";
-
-const TRANSACTION_TYPES = new Set([
-  "TransactionPosted",
-  "TransactionUpdated",
-  "TransactionRemoved",
-  "TransactionAnnotated",
-]);
 
 export interface DashboardTxn {
   txnId: string;
@@ -59,24 +48,23 @@ export interface DashboardViewModel {
 }
 
 export function buildDashboardViewModel(input: {
-  events: readonly EventEnvelope[];
+  /** Folded state. Callers pass a cached snapshot (projectionCache) so a
+   * render costs O(new events), not O(all history); `events` is accepted for
+   * tests and one-off builds. */
+  snapshot?: ProjectionSnapshot;
+  events?: readonly EventEnvelope[];
   /** YYYY-MM-DD in the user's timezone — injected, never read from a clock here. */
   todayLocal: string;
   /** ISO UTC "now" — injected for the data-age label. */
   nowIso: string;
 }): DashboardViewModel {
-  const { events, todayLocal, nowIso } = input;
+  const { todayLocal, nowIso } = input;
 
   // Everything derives from the one event log: accounts, buckets, and bills
   // all fold from it, so the dashboard and the decision engine read exactly
   // the same money picture (docs/adr/ADR-003-events.md).
-  const accounts = foldAccounts(events);
-  const buckets = foldBuckets(events);
-  const bills = foldBills(events);
-  const projection = applyEvents(
-    emptyProjection(),
-    events.filter((e): e is TransactionEvent => TRANSACTION_TYPES.has(e.type)),
-  );
+  const snap = input.snapshot ?? buildSnapshot(input.events ?? []);
+  const { accounts, buckets, bills, transactions: projection } = snap;
 
   const state = computeFinancialState({ accounts, projection, buckets, bills, todayLocal });
 

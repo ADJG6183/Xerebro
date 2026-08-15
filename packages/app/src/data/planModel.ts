@@ -9,12 +9,12 @@
  * onto the numbers that decide "Can I buy this?", not a separate ledger.
  */
 import {
-  foldBills,
-  foldBuckets,
+  buildSnapshot,
   formatMinor,
   type Bill,
   type Bucket,
   type EventEnvelope,
+  type ProjectionSnapshot,
 } from "@xerebro/engines";
 
 export interface BucketRow {
@@ -45,11 +45,13 @@ export interface PlanViewModel {
 }
 
 export function buildPlanViewModel(input: {
-  events: readonly EventEnvelope[];
+  /** Cached folded state (projectionCache); `events` is the test path. */
+  snapshot?: ProjectionSnapshot;
+  events?: readonly EventEnvelope[];
   todayLocal: string;
 }): PlanViewModel {
-  const buckets = foldBuckets(input.events);
-  const bills = foldBills(input.events);
+  const snap = input.snapshot ?? buildSnapshot(input.events ?? []);
+  const { buckets, bills } = snap;
 
   return {
     buckets: buckets.map(bucketRow),

@@ -16,34 +16,22 @@
  */
 import {
   buildRecommendationRecord,
+  buildSnapshot,
   checkFaithfulness,
   computeFinancialState,
   decidePurchase,
-  emptyProjection,
-  applyEvents,
-  foldAccounts,
-  foldBills,
-  foldBuckets,
   renderTemplateExplanation,
   verifyHighStakes,
   PURCHASE_REQUIRED_INPUTS,
   PURCHASE_FRESHNESS_WINDOW_SECONDS,
   type Account,
-  type EventEnvelope,
   type RecommendationRecord,
-  type TransactionEvent,
 } from "@xerebro/engines";
 import type { DeviceEventLog } from "./deviceLog";
+import type { ProjectionCache } from "./projectionCache";
 import type { Outbox } from "./outbox";
 import { pullOnce, sendOrQueue, type SyncTransport } from "./syncClient";
 import { makeUserEvent, type EventFactoryDeps } from "./userEvents";
-
-const TRANSACTION_TYPES = new Set([
-  "TransactionPosted",
-  "TransactionUpdated",
-  "TransactionRemoved",
-  "TransactionAnnotated",
-]);
 
 export interface DecisionFlowDeps {
   log: DeviceEventLog;
@@ -52,6 +40,9 @@ export interface DecisionFlowDeps {
   factory: EventFactoryDeps;
   userId: string;
   refreshTimeoutMs?: number; // verificationEngine.md: 3s
+  /** Shared fold cache (projectionCache.ts). Absent = fold from scratch,
+   * which tests and one-off callers use. */
+  projections?: ProjectionCache;
 }
 
 export interface PurchaseCheckResult {
@@ -80,7 +71,7 @@ export async function runPurchaseCheck(
     offline = true;
   }
 
-  let snapshot = await computeSnapshot(deps.log, nowIso);
+  let snapshot = await computeSnapshot(deps, nowIso);
 
   // Refresh-race: only aggregator accounts can be stale (manual are exempt).
   if (snapshot.aggregatorAgeSeconds > PURCHASE_FRESHNESS_WINDOW_SECONDS) {
@@ -88,7 +79,7 @@ export async function runPurchaseCheck(
     if (refreshed) {
       try {
         await pullOnce(deps.transport, deps.log);
-        snapshot = await computeSnapshot(deps.log, nowIso);
+        snapshot = await computeSnapshot(deps, nowIso);
       } catch {
         offline = true;
       }
@@ -203,18 +194,18 @@ export async function submitFeedback(
   return true;
 }
 
-async function computeSnapshot(log: DeviceEventLog, nowIso: string) {
-  const events: EventEnvelope[] = await log.all();
-  const accounts = foldAccounts(events);
-  const projection = applyEvents(
-    emptyProjection(),
-    events.filter((e): e is TransactionEvent => TRANSACTION_TYPES.has(e.type)),
-  );
+async function computeSnapshot(deps: DecisionFlowDeps, nowIso: string) {
+  // Reuse the app's cached fold when available (projectionCache.ts), so a
+  // purchase check costs O(new events) instead of O(all history).
+  const folded = deps.projections
+    ? await deps.projections.current(deps.log)
+    : buildSnapshot(await deps.log.all());
+  const { accounts, transactions: projection, buckets, bills } = folded;
   const state = computeFinancialState({
     accounts,
     projection,
-    buckets: foldBuckets(events),
-    bills: foldBills(events),
+    buckets,
+    bills,
     todayLocal: nowIso.slice(0, 10),
   });
 

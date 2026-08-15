@@ -3,6 +3,7 @@ export * from "./events";
 export * from "./projection/transactions";
 export * from "./projection/accounts";
 export * from "./projection/plans";
+export * from "./projection/snapshot";
 export * from "./explanation/template";
 export * from "./explanation/faithfulness";
 export * from "./validation";

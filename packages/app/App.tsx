@@ -25,7 +25,8 @@ import { authedHttpTransport } from "./src/data/httpTransport";
 import { openDeviceLog } from "./src/data/openDeviceLog";
 import { openTokenStore } from "./src/data/openTokenStore";
 import { flushOutbox, pullOnce, sendOrQueue, type SyncTransport } from "./src/data/syncClient";
-import { withPending, type Outbox } from "./src/data/outbox";
+import { type Outbox } from "./src/data/outbox";
+import { createProjectionCache } from "./src/data/projectionCache";
 import { openOutbox } from "./src/data/openOutbox";
 import {
   accountUpserted,
@@ -76,22 +77,26 @@ export default function App() {
   const [answer, setAnswer] = useState<PurchaseCheckResult | null>(null);
   const [enhanced, setEnhanced] = useState<EnhancedExplanation | null>(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
+  /** Folded state cached across renders; survives for the app's lifetime. */
+  const [projections] = useState(() => createProjectionCache());
 
   const rebuild = useCallback(async (deviceLog: DeviceEventLog, box: Outbox) => {
-    // Optimistic view: committed events + queued outbox events wearing
-    // provisional sequences. An offline action shows up instantly.
-    const events = withPending(await deviceLog.all(), await box.all());
+    // Optimistic view: cached snapshot of committed events + queued outbox
+    // events wearing provisional sequences. An offline action shows up
+    // instantly, and the cache means a render folds only what's NEW
+    // (projectionCache.ts) rather than re-folding all history.
+    const snapshot = await projections.withPending(deviceLog, await box.all());
     setPendingCount(await box.size());
     const now = new Date();
     const todayLocal = now.toISOString().slice(0, 10);
-    setVm(buildDashboardViewModel({ events, todayLocal, nowIso: now.toISOString() }));
-    setPlanVm(buildPlanViewModel({ events, todayLocal }));
+    setVm(buildDashboardViewModel({ snapshot, todayLocal, nowIso: now.toISOString() }));
+    setPlanVm(buildPlanViewModel({ snapshot, todayLocal }));
     setAccounts(
-      foldAccounts(events)
+      snapshot.accounts
         .filter((a) => a.source === "manual" && a.status === "active")
         .map((a) => ({ accountId: a.accountId, name: a.name })),
     );
-  }, []);
+  }, [projections]);
 
   /** Every manual write goes through the same offline-safe path (Milestone 7)
    * and repaints optimistically. Returns nothing — the outbox guarantees the
@@ -145,7 +150,7 @@ export default function App() {
 
   const flowDeps = useCallback((): DecisionFlowDeps | null => {
     if (!log || !outbox || !transport) return null;
-    return { log, outbox, transport, factory: factoryDeps, userId };
+    return { log, outbox, transport, factory: factoryDeps, userId, projections };
   }, [log, outbox, transport, userId]);
 
   const onCheck = useCallback(async () => {
