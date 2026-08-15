@@ -17,6 +17,18 @@ One vertical slice, every layer thin but real:
 9. **Feedback:** logged (`accepted / ignored / modified / rejected`) — **acted on by nothing**. The learning lanes stay dark in v1; we ship the sensor, not the actuator.
 10. **Dashboard:** the mockups' home screen (balance, quick overview, recent transactions) rendered from local state with data-age labels.
 
+## Build status (2026-08-14)
+
+Items 1–10 are built. Beyond the original slice, also shipped: device-token
+auth, at-rest encryption on device, offline outbox, Postgres persistence,
+materialized projections, the grounded copilot (docs/copilotArchitecture.md),
+and real Plaid integration — HTTP gateway, hosted Link, ES256 webhook
+verification, sealed token custody, and balance sync.
+
+Remaining before a real-user launch: identity linking (passkeys — needs a
+development build), page-level SQLCipher (same dev build), an offline
+explanation-faithfulness eval harness, and signed zero-retention LLM terms.
+
 ## Explicitly deferred (contracts already written)
 
 | Feature | Where its contract lives |

@@ -16,13 +16,22 @@
 import type { MinorUnits } from "@xerebro/engines";
 import type { UnsequencedEvent, EventStore } from "../eventStore";
 import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "./gateway";
-import type { ItemStore, TxnRegistry } from "./stores";
+import type { ItemStore, PlaidItem, TxnRegistry } from "./stores";
+import type { TokenVault } from "./tokenVault";
+
+/** Access tokens are stored sealed; open them only at the call site. */
+export function accessTokenOf(deps: AclDeps, item: PlaidItem): string {
+  return deps.tokens ? deps.tokens.open(item.accessTokenRef) : item.accessTokenRef;
+}
 
 export interface AclDeps {
   plaid: PlaidGateway;
   events: EventStore;
   items: ItemStore;
   registry: TxnRegistry;
+  /** Decrypts stored access tokens just-in-time (plaid/tokenVault.ts).
+   * Absent = the stored value IS the token (dev/tests). */
+  tokens?: TokenVault;
   /** Injected clock — deterministic in tests. */
   now: () => string;
   /** Injected id generator — deterministic in tests. */
@@ -48,8 +57,14 @@ export async function syncPlaidItem(deps: AclDeps, itemId: string): Promise<Sync
   const outcome: SyncOutcome = { pages: 0, appended: 0, dedupedPages: 0 };
   let cursor = item.cursor;
 
-  for (;;) {
-    const page = await deps.plaid.transactionsSync(item.accessTokenRef, cursor);
+  // Bounded drain. Plaid always advances next_cursor, but an aggregator bug
+  // (or a misconfigured fake) that returns has_more with an UNCHANGED cursor
+  // would spin forever, holding a request open and appending nothing. A
+  // never-terminating loop is not an acceptable failure mode for a webhook
+  // handler, so we bound it two ways: no cursor progress, or a page cap.
+  const MAX_PAGES = 100; // 100 × 500 txns = 50k, far beyond any real sync
+  while (outcome.pages < MAX_PAGES) {
+    const page = await deps.plaid.transactionsSync(accessTokenOf(deps, item), cursor);
     const events = await normalizePage(deps, item.userId, page);
     const result = await deps.events.appendBatch(
       item.userId,
@@ -62,8 +77,9 @@ export async function syncPlaidItem(deps: AclDeps, itemId: string): Promise<Sync
     if (result.deduped) outcome.dedupedPages += 1;
 
     await deps.items.setCursor(itemId, page.next_cursor);
+    const advanced = page.next_cursor !== cursor;
     cursor = page.next_cursor;
-    if (!page.has_more) break;
+    if (!page.has_more || !advanced) break;
   }
   return outcome;
 }

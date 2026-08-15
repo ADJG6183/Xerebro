@@ -37,6 +37,8 @@ import {
   type OutgoingEvent,
 } from "./src/data/userEvents";
 import { AddEntryScreen, type NewAccount, type NewTransaction } from "./src/ui/AddEntryScreen";
+import { linkBankAccount } from "./src/data/plaidLink";
+import { webAuthOpener } from "./src/data/openWebAuth";
 import { AskScreen } from "./src/ui/AskScreen";
 import { ChatScreen } from "./src/ui/ChatScreen";
 import { BudgetScreen, type NewBill, type NewBucket } from "./src/ui/BudgetScreen";
@@ -47,6 +49,8 @@ import { theme } from "./src/ui/theme";
 import { TransactionsScreen } from "./src/ui/TransactionsScreen";
 
 const API_URL = resolveApiUrl();
+/** Where Plaid's hosted Link returns after the user finishes. */
+const REDIRECT_URL = "xerebro://plaid";
 
 const factoryDeps: EventFactoryDeps = {
   newId: () => `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
@@ -77,6 +81,8 @@ export default function App() {
   const [answer, setAnswer] = useState<PurchaseCheckResult | null>(null);
   const [enhanced, setEnhanced] = useState<EnhancedExplanation | null>(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [linkNotice, setLinkNotice] = useState("");
   /** Folded state cached across renders; survives for the app's lifetime. */
   const [projections] = useState(() => createProjectionCache());
 
@@ -257,6 +263,28 @@ export default function App() {
     [submit],
   );
 
+  /** Bank linking: hosted Plaid Link, then a resync so the new accounts and
+   * transactions appear (the ACCESS token stays server-side throughout). */
+  const onLinkBank = useCallback(async () => {
+    if (!transport || !log || !outbox) return;
+    setLinking(true);
+    setLinkNotice("");
+    try {
+      const outcome = await linkBankAccount(transport, webAuthOpener, REDIRECT_URL);
+      if (outcome.status === "linked") {
+        projections.invalidate(); // fresh aggregator history: refold cleanly
+        await sync(transport, log, outbox);
+        setEntering(false);
+      } else if (outcome.status === "unavailable") {
+        setLinkNotice("Bank linking isn't configured on the server yet.");
+      } else if (outcome.status === "failed") {
+        setLinkNotice(outcome.reason);
+      }
+    } finally {
+      setLinking(false);
+    }
+  }, [transport, log, outbox, projections, sync]);
+
   const onRefresh = useCallback(async () => {
     if (!log || !outbox || !transport) return;
     setRefreshing(true);
@@ -285,6 +313,9 @@ export default function App() {
             onSubmitAccount={onAddAccount}
             onSubmitTransaction={onAddTransaction}
             onBack={() => setEntering(false)}
+            onLinkBank={onLinkBank}
+            linking={linking}
+            {...(linkNotice ? { linkNotice } : {})}
           />
         ) : asking ? (
           <AskScreen

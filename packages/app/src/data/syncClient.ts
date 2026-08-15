@@ -28,6 +28,10 @@ export interface SyncTransport {
   }>;
   /** Copilot chat via the server (docs/copilotArchitecture.md). */
   chat?(question: string, todayLocal: string): Promise<CopilotAnswer>;
+  /** Bank linking (docs/SecurityPrivacy.md). Absent/failing = manual-only.
+   * The ACCESS token never comes back here — only the item id. */
+  createLinkToken?(): Promise<{ linkToken: string; expiration: string }>;
+  exchangePublicToken?(publicToken: string): Promise<{ itemId: string }>;
 }
 
 export interface PullResult {

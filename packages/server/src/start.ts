@@ -11,6 +11,9 @@ import { buildApp, DEV_TRUST_ALL_VERIFIER } from "./app";
 import { InMemoryAuthStore } from "./auth/store";
 import { InMemoryEventStore } from "./eventStore";
 import { openAiGateway } from "./llm/gateway";
+import { plaidHttpGateway, plaidHttpLinkGateway } from "./plaid/httpGateway";
+import { plaidKeyFetcher, plaidWebhookVerifier } from "./plaid/webhookVerifier";
+import { createTokenVault, PLAINTEXT_DEV_VAULT } from "./plaid/tokenVault";
 import {
   createPool,
   ensureSchema,
@@ -51,13 +54,38 @@ const databaseUrl = process.env.DATABASE_URL;
 const pool = databaseUrl ? createPool(databaseUrl) : undefined;
 if (pool) await ensureSchema(pool);
 
+// Bank linking: set PLAID_CLIENT_ID + PLAID_SECRET (+ PLAID_ENV, default
+// sandbox) to enable. Without them the app stays manual-only and /plaid/*
+// answers 503 — the same graceful-absence pattern as the LLM.
+const plaidConfig =
+  process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET
+    ? {
+        clientId: process.env.PLAID_CLIENT_ID,
+        secret: process.env.PLAID_SECRET,
+        env: (process.env.PLAID_ENV === "production" ? "production" : "sandbox") as
+          | "sandbox"
+          | "production",
+        ...(process.env.PLAID_WEBHOOK_URL ? { webhookUrl: process.env.PLAID_WEBHOOK_URL } : {}),
+      }
+    : undefined;
+
+// Access tokens are sealed at rest when a key is configured
+// (openssl rand -base64 32). The dev fallback is named to be unmistakable.
+const tokens = process.env.PLAID_TOKEN_KEY
+  ? createTokenVault(process.env.PLAID_TOKEN_KEY)
+  : PLAINTEXT_DEV_VAULT;
+
 const app = buildApp({
   ...(llm ? { llm } : {}),
-  plaid: {
-    async transactionsSync() {
-      throw new Error("Plaid not configured yet — dev server serves /events only");
-    },
-  },
+  plaid: plaidConfig
+    ? plaidHttpGateway(plaidConfig)
+    : {
+        async transactionsSync() {
+          throw new Error("Plaid not configured — set PLAID_CLIENT_ID and PLAID_SECRET");
+        },
+      },
+  ...(plaidConfig ? { plaidLink: plaidHttpLinkGateway(plaidConfig) } : {}),
+  tokens,
   events: pool ? new PostgresEventStore(pool) : new InMemoryEventStore(),
   items: pool ? new PostgresItemStore(pool) : new InMemoryItemStore(),
   registry: pool ? new PostgresTxnRegistry(pool) : new InMemoryTxnRegistry(),
@@ -66,7 +94,11 @@ const app = buildApp({
     : new InMemoryAuthStore({ now: () => new Date().toISOString(), newId: () => randomUUID() }),
   now: () => new Date().toISOString(),
   newEventId: () => randomUUID(),
-  webhookVerifier: DEV_TRUST_ALL_VERIFIER,
+  // Real ES256 verification whenever Plaid is configured; the trust-all
+  // stub only survives in fully-local manual mode (SecurityPrivacy.md).
+  webhookVerifier: plaidConfig
+    ? plaidWebhookVerifier(plaidKeyFetcher(plaidConfig))
+    : DEV_TRUST_ALL_VERIFIER,
 });
 
 const port = Number(process.env.PORT ?? 3000);
@@ -74,7 +106,7 @@ app
   .listen({ port, host: "0.0.0.0" })
   .then(() =>
     console.log(
-      `xerebro dev server on :${port} (storage: ${pool ? "postgres (durable)" : "in-memory - wiped on restart; set DATABASE_URL"}; AI explanations ${llm ? "ON" : "OFF - set OPENAI_API_KEY + OPENAI_MODEL"})`,
+      `xerebro dev server on :${port} (storage: ${pool ? "postgres (durable)" : "in-memory - wiped on restart; set DATABASE_URL"}; AI explanations ${llm ? "ON" : "OFF - set OPENAI_API_KEY + OPENAI_MODEL"}; bank linking ${plaidConfig ? `ON (${plaidConfig.env})` : "OFF - set PLAID_CLIENT_ID + PLAID_SECRET"})`,
     ),
   )
   .catch((err) => {

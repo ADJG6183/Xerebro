@@ -15,6 +15,8 @@ import {
 } from "./llm/explain";
 import type { LlmGateway } from "./llm/gateway";
 import { syncPlaidItem, type AclDeps } from "./plaid/acl";
+import { syncPlaidBalances } from "./plaid/balances";
+import type { PlaidLinkGateway } from "./plaid/gateway";
 
 /**
  * Plaid webhook authenticity check. MUST be replaced with Plaid's JWT
@@ -37,6 +39,9 @@ export interface AppDeps extends AclDeps {
   /** Absent = no provider configured; /explanations returns 503 and clients
    * keep their template explanations (docs/AIArchitecture.md fallback). */
   llm?: LlmGateway;
+  /** Absent = bank linking not configured; /plaid/* returns 503 and the app
+   * stays manual-only. */
+  plaidLink?: PlaidLinkGateway;
 }
 
 /** Paths that authenticate themselves differently (or not yet). */
@@ -45,6 +50,11 @@ const UNAUTHENTICATED_PREFIXES = ["/auth/", "/webhooks/"];
 function sessionOf(request: FastifyRequest): AuthSession {
   // Set by the onRequest hook; routes behind it can rely on its presence.
   return (request as FastifyRequest & { session: AuthSession }).session;
+}
+
+/** Raw request bytes, captured by the content-type parser below. */
+function rawBodyOf(request: FastifyRequest): string | undefined {
+  return (request as FastifyRequest & { rawBody?: string }).rawBody;
 }
 
 interface PlaidWebhookBody {
@@ -59,6 +69,22 @@ interface UserEventsBody {
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
+
+  // Keep the raw JSON bytes alongside the parsed body: Plaid's webhook
+  // signature covers a hash of exactly what was sent, so re-serializing
+  // would break verification (plaid/webhookVerifier.ts).
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (request, body: string, done) => {
+      (request as FastifyRequest & { rawBody?: string }).rawBody = body;
+      try {
+        done(null, body.length === 0 ? {} : JSON.parse(body));
+      } catch (err) {
+        done(err as Error, undefined);
+      }
+    },
+  );
 
   /**
    * The trust boundary (SecurityPrivacy.md): identity comes from a verified
@@ -96,10 +122,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
    * updates", never the data itself. We ack fast and drain transactions/sync.
    */
   app.post<{ Body: PlaidWebhookBody }>("/webhooks/plaid", async (request, reply) => {
-    const ok = await deps.webhookVerifier.verify(
-      request.headers as Record<string, unknown>,
-      JSON.stringify(request.body),
-    );
+    // The RAW bytes, not a re-serialization: Plaid signs a hash of exactly
+    // what it sent, and JSON round-tripping can reorder keys
+    // (plaid/webhookVerifier.ts).
+    const raw = rawBodyOf(request) ?? JSON.stringify(request.body);
+    const ok = await deps.webhookVerifier.verify(request.headers as Record<string, unknown>, raw);
     if (!ok) return reply.code(401).send({ error: "webhook verification failed" });
 
     const { webhook_type, webhook_code, item_id } = request.body ?? {};
@@ -111,6 +138,48 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return reply.code(200).send({ handled: true, ...outcome });
     }
     return reply.code(202).send({ handled: false });
+  });
+
+  /**
+   * Plaid Link handshake (docs/SecurityPrivacy.md). Two steps, because the
+   * access token must never touch the device:
+   *  1. the app asks for a short-lived link token and opens Plaid Link;
+   *  2. Link returns a PUBLIC token, which we exchange server-side for the
+   *     durable access token — sealed before storage, never sent back.
+   */
+  app.post("/plaid/link-token", async (request, reply) => {
+    if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
+    const { userId } = sessionOf(request);
+    try {
+      return reply.send(await deps.plaidLink.createLinkToken(userId));
+    } catch {
+      return reply.code(502).send({ error: "could not start bank linking" });
+    }
+  });
+
+  app.post<{ Body: { publicToken?: string } }>("/plaid/exchange", async (request, reply) => {
+    if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
+    const { publicToken } = request.body ?? {};
+    if (!publicToken) return reply.code(400).send({ error: "publicToken required" });
+    const { userId } = sessionOf(request);
+
+    try {
+      const { accessToken, itemId } = await deps.plaidLink.exchangePublicToken(publicToken);
+      await deps.items.put({
+        itemId,
+        userId,
+        // Sealed at rest; opened only at the Plaid call site (tokenVault.ts).
+        accessTokenRef: deps.tokens ? deps.tokens.seal(accessToken) : accessToken,
+        cursor: "",
+      });
+      // First pull: balances (so the account appears) then transactions.
+      const balances = await syncPlaidBalances(deps, itemId);
+      const transactions = await syncPlaidItem(deps, itemId);
+      // NOTE: itemId only — the access token is never returned to the device.
+      return reply.send({ itemId, balances, transactions });
+    } catch {
+      return reply.code(502).send({ error: "could not link bank" });
+    }
   });
 
   /**
@@ -127,6 +196,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return reply.code(404).send({ error: "unknown item" });
     }
     try {
+      // Balances first: they carry `balanceAsOf`, the freshness anchor the
+      // refresh-race is actually waiting on (docs/verificationEngine.md).
+      await syncPlaidBalances(deps, request.params.itemId);
       const outcome = await syncPlaidItem(deps, request.params.itemId);
       return reply.send(outcome);
     } catch {

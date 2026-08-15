@@ -112,5 +112,19 @@ export function authedHttpTransport(
       if (!res.ok) throw new Error(`chat failed: HTTP ${res.status}`);
       return (await res.json()) as import("./chat").CopilotAnswer;
     },
+    async createLinkToken() {
+      const res = await fetchAuthed(`/plaid/link-token`, { method: "POST" });
+      if (!res.ok) throw new Error(`link token failed: HTTP ${res.status}`);
+      return (await res.json()) as { linkToken: string; expiration: string };
+    },
+    async exchangePublicToken(publicToken) {
+      const res = await fetchAuthed(`/plaid/exchange`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ publicToken }),
+      });
+      if (!res.ok) throw new Error(`exchange failed: HTTP ${res.status}`);
+      return (await res.json()) as { itemId: string };
+    },
   };
 }

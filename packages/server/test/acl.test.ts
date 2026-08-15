@@ -133,6 +133,17 @@ describe("idempotency on (itemId, cursor) — docs/adr/ADR-003-events.md", () =>
     expect(await deps.events.lastSequence("user-1")).toBe(1); // exactly one event, ever
   });
 
+  it("TERMINATES when an aggregator reports has_more without advancing the cursor", async () => {
+    // A misbehaving aggregator (or a bug) could otherwise spin forever inside
+    // a webhook handler. The drain must be bounded, not merely well-behaved.
+    const deps = await makeDeps({
+      "": page({ added: [plaidTxn({ transaction_id: "t-stuck" })] }, "", true), // same cursor!
+    });
+    const outcome = await syncPlaidItem(deps, "item-1");
+    expect(outcome.pages).toBe(1); // stopped instead of looping
+    expect(await deps.events.lastSequence("user-1")).toBe(1);
+  });
+
   it("drains multi-page updates in one sync (has_more loop) with per-page batch keys", async () => {
     const deps = await makeDeps({
       "": page({ added: [plaidTxn({ transaction_id: "t-1" })] }, "c1", true),

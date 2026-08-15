@@ -28,6 +28,10 @@ export function AddEntryScreen(props: {
   onSubmitAccount: (a: NewAccount) => void;
   onSubmitTransaction: (t: NewTransaction) => void;
   onBack: () => void;
+  /** Bank linking (docs/SecurityPrivacy.md). Absent = manual-only build. */
+  onLinkBank?: () => void;
+  linking?: boolean;
+  linkNotice?: string;
 }) {
   const hasAccounts = props.accounts.length > 0;
   const [mode, setMode] = useState<"account" | "transaction">(
@@ -57,7 +61,28 @@ export function AddEntryScreen(props: {
       )}
 
       {mode === "account" ? (
-        <AccountForm onSubmit={props.onSubmitAccount} />
+        <View>
+          {props.onLinkBank && (
+            <View style={styles.linkBlock}>
+              <Pressable
+                style={[styles.linkBtn, props.linking && styles.linkBtnBusy]}
+                onPress={props.onLinkBank}
+                disabled={props.linking}
+              >
+                <Ionicons name="business-outline" size={18} color={theme.onPrimary} />
+                <Text style={styles.linkBtnText}>
+                  {props.linking ? "Opening your bank…" : "Connect a bank"}
+                </Text>
+              </Pressable>
+              <Text style={styles.linkHint}>
+                Your bank credentials go to Plaid, never to Xerebro.
+              </Text>
+              {props.linkNotice ? <Text style={styles.linkNotice}>{props.linkNotice}</Text> : null}
+              <Text style={styles.orDivider}>or add one manually</Text>
+            </View>
+          )}
+          <AccountForm onSubmit={props.onSubmitAccount} />
+        </View>
       ) : (
         <TransactionForm
           accounts={props.accounts}
@@ -177,4 +202,19 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   title: { fontSize: 18, fontWeight: "800", color: theme.ink },
+  linkBlock: { marginBottom: 18 },
+  linkBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: theme.primaryDeep,
+    borderRadius: 12,
+    paddingVertical: 15,
+  },
+  linkBtnBusy: { opacity: 0.6 },
+  linkBtnText: { color: theme.onPrimary, fontWeight: "700", fontSize: 15 },
+  linkHint: { fontSize: 12, color: theme.slate, textAlign: "center", marginTop: 8 },
+  linkNotice: { fontSize: 12, color: theme.amber, textAlign: "center", marginTop: 6 },
+  orDivider: { fontSize: 12, color: theme.faint, textAlign: "center", marginTop: 14 },
 });
