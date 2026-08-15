@@ -23,9 +23,16 @@ export function toAccountType(plaidType: string, subtype: string | null): Accoun
   if (plaidType === "loan") return "loan";
   if (plaidType === "investment") return "investment";
   if (plaidType === "depository") {
-    if (subtype === "savings") return "savings";
+    if (subtype === "checking") return "checking";
+    if (subtype === "savings" || subtype === "money market") return "savings";
     if (subtype === "cash management" || subtype === "prepaid") return "cash";
-    return "checking";
+    // Locked or restricted deposits — cd, hsa, and anything unfamiliar —
+    // are NOT spendable today. financialState.ts counts checking/savings/cash
+    // toward available cash, so classifying a CD there would inflate the
+    // number the purchase-approval rules trust. "investment" keeps it in net
+    // worth but out of spendable cash. (Caught against real sandbox data,
+    // where Plaid returns a "Plaid CD" depository account.)
+    return "investment";
   }
   return "cash"; // unknown types are treated as plain cash, never dropped
 }

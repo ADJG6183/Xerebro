@@ -65,9 +65,19 @@ describe("balance mapping", () => {
   it("maps Plaid types to ours and floats to integer minor units", () => {
     expect(toAccountType("depository", "checking")).toBe("checking");
     expect(toAccountType("depository", "savings")).toBe("savings");
+    expect(toAccountType("depository", "money market")).toBe("savings");
+    expect(toAccountType("depository", "prepaid")).toBe("cash");
     expect(toAccountType("credit", "credit card")).toBe("credit");
     expect(toAccountType("loan", "student")).toBe("loan");
     expect(toAccountType("weird-new-type", null)).toBe("cash"); // never dropped
+  });
+
+  it("keeps LOCKED deposits out of spendable cash (real sandbox regression)", () => {
+    // Plaid's sandbox returns a "Plaid CD" as depository/cd. Classified as
+    // checking it would inflate available cash and skew purchase approvals.
+    expect(toAccountType("depository", "cd")).toBe("investment");
+    expect(toAccountType("depository", "hsa")).toBe("investment");
+    expect(toAccountType("depository", "some-future-subtype")).toBe("investment");
   });
 
   it("emits AccountUpserted with integer money and a freshness anchor", async () => {
