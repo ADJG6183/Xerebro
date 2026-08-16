@@ -19,6 +19,9 @@ import {
 export interface DashboardTxn {
   txnId: string;
   merchant: string;
+  /** Aggregator merchant logo; absent for manual entries and unresolved
+   * merchants — the UI falls back to a category icon (ui/bits.tsx). */
+  logoUrl?: string;
   category?: string;
   amountFormatted: string;
   isInflow: boolean;
@@ -73,6 +76,7 @@ export function buildDashboardViewModel(input: {
     .map((t) => ({
       txnId: t.txnId,
       merchant: t.effectiveMerchant,
+      ...(t.merchantLogoUrl !== undefined ? { logoUrl: t.merchantLogoUrl } : {}),
       ...(t.effectiveCategory !== undefined ? { category: t.effectiveCategory } : {}),
       amountFormatted: `${t.amountMinor > 0 ? "+" : ""}${formatMinor(t.amountMinor)}`,
       isInflow: t.amountMinor > 0,
