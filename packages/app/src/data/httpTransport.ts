@@ -124,7 +124,11 @@ export function authedHttpTransport(
     async createLinkToken() {
       const res = await fetchAuthed(`/plaid/link-token`, { method: "POST" });
       if (!res.ok) throw new Error(`link token failed: HTTP ${res.status}`);
-      return (await res.json()) as { linkToken: string; expiration: string };
+      return (await res.json()) as {
+        linkToken: string;
+        expiration: string;
+        hostedLinkUrl?: string;
+      };
     },
     async exchangePublicToken(publicToken) {
       const res = await fetchAuthed(`/plaid/exchange`, {

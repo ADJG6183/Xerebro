@@ -41,9 +41,9 @@ export async function linkBankAccount(
     return { status: "unavailable" };
   }
 
-  let linkToken: string;
+  let hostedLinkUrl: string | undefined;
   try {
-    ({ linkToken } = await transport.createLinkToken());
+    ({ hostedLinkUrl } = await transport.createLinkToken());
   } catch (err) {
     // 503 = the server has no Plaid keys; anything else is a real failure.
     return String(err).includes("503")
@@ -51,10 +51,14 @@ export async function linkBankAccount(
       : { status: "failed", reason: "could not start bank linking" };
   }
 
-  const result = await opener.open(
-    `https://secure.plaid.com/link?isWebview=true&token=${encodeURIComponent(linkToken)}`,
-    redirectUrl,
-  );
+  // Open the URL PLAID gave us. Constructing a secure.plaid.com URL by hand
+  // is rejected with "access denied" — only Hosted Link URLs minted by
+  // /link/token/create (hosted_link) are valid outside the native SDK.
+  if (!hostedLinkUrl) {
+    return { status: "failed", reason: "bank linking isn't set up for web sign-in yet" };
+  }
+
+  const result = await opener.open(hostedLinkUrl, redirectUrl);
   if (result.type !== "success" || !result.url) return { status: "cancelled" };
 
   const publicToken = publicTokenFrom(result.url);

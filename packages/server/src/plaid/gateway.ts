@@ -72,9 +72,21 @@ export interface PlaidGateway {
 /** Link-token issuing + public-token exchange — the connection handshake.
  * Separate from PlaidGateway because the ACL never needs it. */
 export interface PlaidLinkGateway {
-  createLinkToken(userId: string): Promise<{ linkToken: string; expiration: string }>;
+  createLinkToken(userId: string): Promise<{
+    linkToken: string;
+    expiration: string;
+    /** Plaid-hosted Link page; present when hosted_link was requested. The
+     * app opens THIS rather than constructing a URL itself. */
+    hostedLinkUrl?: string;
+  }>;
   /** Exchange the short-lived public token from Link for a durable access
    * token. The access token is a SECRET: it never leaves the server
    * (docs/SecurityPrivacy.md). */
   exchangePublicToken(publicToken: string): Promise<{ accessToken: string; itemId: string }>;
+  /**
+   * Ask Plaid whether a Hosted Link session finished, and get its public
+   * token. Needed because Hosted Link without a registered redirect URI
+   * shows its OWN completion screen and never returns to the app — polling
+   * is the only way to learn the user succeeded. */
+  getLinkSessionPublicToken?(linkToken: string): Promise<string | null>;
 }

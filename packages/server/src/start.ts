@@ -66,6 +66,12 @@ const plaidConfig =
           | "sandbox"
           | "production",
         ...(process.env.PLAID_WEBHOOK_URL ? { webhookUrl: process.env.PLAID_WEBHOOK_URL } : {}),
+        // Hosted Link returns here when the user finishes. Must be an https
+        // URL registered in the Plaid dashboard; without it Plaid shows its
+        // own "you're done" screen and the app picks changes up on refresh.
+        ...(process.env.PLAID_LINK_COMPLETION_URL
+          ? { linkCompletionUrl: process.env.PLAID_LINK_COMPLETION_URL }
+          : {}),
       }
     : undefined;
 

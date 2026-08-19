@@ -30,7 +30,11 @@ export interface SyncTransport {
   chat?(question: string, todayLocal: string): Promise<CopilotAnswer>;
   /** Bank linking (docs/SecurityPrivacy.md). Absent/failing = manual-only.
    * The ACCESS token never comes back here — only the item id. */
-  createLinkToken?(): Promise<{ linkToken: string; expiration: string }>;
+  createLinkToken?(): Promise<{
+    linkToken: string;
+    expiration: string;
+    hostedLinkUrl?: string;
+  }>;
   exchangePublicToken?(publicToken: string): Promise<{ itemId: string }>;
 }
 

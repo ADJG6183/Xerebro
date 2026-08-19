@@ -27,6 +27,9 @@ export interface PlaidConfig {
   env: PlaidEnv;
   /** Where Plaid should POST item updates. Omit in local dev (no public URL). */
   webhookUrl?: string;
+  /** Where Hosted Link returns the user when they finish. Omit and Plaid
+   * shows its own completion screen (fine in dev; the app then polls). */
+  linkCompletionUrl?: string;
   timeoutMs?: number;
   maxRetries?: number;
 }
@@ -147,15 +150,46 @@ export function plaidHttpLinkGateway(config: PlaidConfig): PlaidLinkGateway {
   const call = createPlaidHttpClient(config);
   return {
     async createLinkToken(userId) {
-      const res = await call<{ link_token: string; expiration: string }>("/link/token/create", {
+      // `hosted_link: {}` asks Plaid to host the Link UI and return a URL we
+      // can open in a browser. Without it there is no legitimate way to open
+      // Link outside the native SDK — hand-built secure.plaid.com URLs are
+      // rejected ("access denied"), which is exactly what we hit.
+      const res = await call<{
+        link_token: string;
+        expiration: string;
+        hosted_link_url?: string;
+      }>("/link/token/create", {
         client_name: "Xerebro",
         language: "en",
         country_codes: ["US"],
         user: { client_user_id: userId },
         products: ["transactions"],
+        hosted_link: {
+          // Where Plaid sends the user when Link finishes. Plaid appends the
+          // public token; the app captures it and exchanges server-side.
+          ...(config.linkCompletionUrl ? { completion_redirect_uri: config.linkCompletionUrl } : {}),
+        },
         ...(config.webhookUrl ? { webhook: config.webhookUrl } : {}),
       });
-      return { linkToken: res.link_token, expiration: res.expiration };
+      return {
+        linkToken: res.link_token,
+        expiration: res.expiration,
+        ...(res.hosted_link_url ? { hostedLinkUrl: res.hosted_link_url } : {}),
+      };
+    },
+
+    async getLinkSessionPublicToken(linkToken) {
+      const res = await call<{
+        link_sessions?: { results?: { item_add_result?: { public_token?: string } }[] }[];
+      }>("/link/token/get", { link_token: linkToken });
+      // Newest session first; a finished bank-add carries the public token.
+      for (const session of [...(res.link_sessions ?? [])].reverse()) {
+        for (const result of session.results ?? []) {
+          const token = result.item_add_result?.public_token;
+          if (token) return token;
+        }
+      }
+      return null;
     },
 
     async exchangePublicToken(publicToken) {

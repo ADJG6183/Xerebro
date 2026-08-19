@@ -43,7 +43,11 @@ describe("linkBankAccount", () => {
     const transport: SyncTransport = {
       ...baseTransport,
       async createLinkToken() {
-        return { linkToken: "link-sandbox-123", expiration: "2026-08-14T12:00:00Z" };
+        return {
+          linkToken: "link-sandbox-123",
+          expiration: "2026-08-14T12:00:00Z",
+          hostedLinkUrl: "https://secure.plaid.com/hl/abc123",
+        };
       },
       async exchangePublicToken(publicToken) {
         exchanged.push(publicToken);
@@ -56,7 +60,8 @@ describe("linkBankAccount", () => {
 
     expect(outcome).toEqual({ status: "linked", itemId: "item-42" });
     expect(exchanged).toEqual(["public-sandbox-xyz"]); // only the SHORT-LIVED token
-    expect(web.opened[0]).toContain("link-sandbox-123");
+    // We open the URL PLAID minted — never one we build ourselves.
+    expect(web.opened[0]).toBe("https://secure.plaid.com/hl/abc123");
     expect(JSON.stringify(outcome)).not.toContain("access-"); // no access token, ever
   });
 
@@ -82,7 +87,7 @@ describe("linkBankAccount", () => {
     const transport: SyncTransport = {
       ...baseTransport,
       async createLinkToken() {
-        return { linkToken: "link-sandbox-123", expiration: "" };
+        return { linkToken: "link-sandbox-123", expiration: "", hostedLinkUrl: "https://secure.plaid.com/hl/abc" };
       },
       async exchangePublicToken() {
         throw new Error("should not be called");
@@ -97,7 +102,7 @@ describe("linkBankAccount", () => {
     const transport: SyncTransport = {
       ...baseTransport,
       async createLinkToken() {
-        return { linkToken: "link-sandbox-123", expiration: "" };
+        return { linkToken: "link-sandbox-123", expiration: "", hostedLinkUrl: "https://secure.plaid.com/hl/abc" };
       },
       async exchangePublicToken() {
         throw new Error("exchange failed: HTTP 502");
