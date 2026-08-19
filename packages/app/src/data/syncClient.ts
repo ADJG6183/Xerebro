@@ -36,6 +36,8 @@ export interface SyncTransport {
     hostedLinkUrl?: string;
   }>;
   exchangePublicToken?(publicToken: string): Promise<{ itemId: string }>;
+  /** Ask the server whether a Hosted Link session finished (no redirect). */
+  completeLink?(linkToken: string): Promise<{ linked: boolean; itemId?: string }>;
 }
 
 export interface PullResult {

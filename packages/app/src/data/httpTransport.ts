@@ -130,6 +130,15 @@ export function authedHttpTransport(
         hostedLinkUrl?: string;
       };
     },
+    async completeLink(linkToken) {
+      const res = await fetchAuthed(`/plaid/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ linkToken }),
+      });
+      if (!res.ok) throw new Error(`complete failed: HTTP ${res.status}`);
+      return (await res.json()) as { linked: boolean; itemId?: string };
+    },
     async exchangePublicToken(publicToken) {
       const res = await fetchAuthed(`/plaid/exchange`, {
         method: "POST",

@@ -158,6 +158,46 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
   });
 
+  /**
+   * Complete a link WITHOUT a redirect — called ONCE per bank connection,
+   * never on the ongoing-update path (that's the webhook + cursor sync).
+   *
+   * Hosted Link with no registered redirect URI shows its own "you're done"
+   * screen and never returns to the app, so the device can't capture a
+   * public token. Plaid does record the session, so the app sends back the
+   * link token it started with, we ask Plaid whether it finished, and then
+   * exchange server-side exactly as the redirect path would have.
+   */
+  app.post<{ Body: { linkToken?: string } }>("/plaid/complete", async (request, reply) => {
+    if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
+    const { linkToken } = request.body ?? {};
+    if (!linkToken) return reply.code(400).send({ error: "linkToken required" });
+    if (!deps.plaidLink.getLinkSessionPublicToken) {
+      return reply.code(501).send({ error: "session lookup not supported" });
+    }
+    const { userId } = sessionOf(request);
+
+    try {
+      const publicToken = await deps.plaidLink.getLinkSessionPublicToken(linkToken);
+      // Not an error: the user may still be mid-flow, or may have cancelled.
+      if (!publicToken) return reply.code(202).send({ linked: false });
+
+      const { accessToken, itemId } = await deps.plaidLink.exchangePublicToken(publicToken);
+      await deps.items.put({
+        itemId,
+        userId,
+        accessTokenRef: deps.tokens ? deps.tokens.seal(accessToken) : accessToken,
+        cursor: "",
+      });
+      const balances = await syncPlaidBalances(deps, itemId);
+      const transactions = await syncPlaidItem(deps, itemId);
+      return reply.send({ linked: true, itemId, balances, transactions });
+    } catch (err) {
+      const failure = classifyAggregatorError(err);
+      return reply.code(502).send({ error: "could not finish linking", failure });
+    }
+  });
+
   app.post<{ Body: { publicToken?: string } }>("/plaid/exchange", async (request, reply) => {
     if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
     const { publicToken } = request.body ?? {};

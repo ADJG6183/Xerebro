@@ -42,8 +42,9 @@ export async function linkBankAccount(
   }
 
   let hostedLinkUrl: string | undefined;
+  let linkToken = "";
   try {
-    ({ hostedLinkUrl } = await transport.createLinkToken());
+    ({ hostedLinkUrl, linkToken } = await transport.createLinkToken());
   } catch (err) {
     // 503 = the server has no Plaid keys; anything else is a real failure.
     return String(err).includes("503")
@@ -59,15 +60,31 @@ export async function linkBankAccount(
   }
 
   const result = await opener.open(hostedLinkUrl, redirectUrl);
-  if (result.type !== "success" || !result.url) return { status: "cancelled" };
 
-  const publicToken = publicTokenFrom(result.url);
-  if (!publicToken) return { status: "cancelled" };
-
-  try {
-    const { itemId } = await transport.exchangePublicToken(publicToken);
-    return { status: "linked", itemId };
-  } catch {
-    return { status: "failed", reason: "could not finish linking your bank" };
+  // PATH 1 — a redirect URI is registered: Plaid handed the public token
+  // back through the URL, so exchange it directly.
+  const publicToken = result.type === "success" && result.url ? publicTokenFrom(result.url) : null;
+  if (publicToken) {
+    try {
+      const { itemId } = await transport.exchangePublicToken(publicToken);
+      return { status: "linked", itemId };
+    } catch {
+      return { status: "failed", reason: "could not finish linking your bank" };
+    }
   }
+
+  // PATH 2 — no redirect (Hosted Link showed its own completion screen and
+  // the user closed it). The device never sees a public token, but Plaid
+  // recorded the session: ask the server whether it finished. Without this,
+  // closing that window silently discarded a successful link.
+  if (transport.completeLink) {
+    try {
+      const { linked, itemId } = await transport.completeLink(linkToken);
+      if (linked && itemId) return { status: "linked", itemId };
+    } catch {
+      return { status: "failed", reason: "could not confirm your bank connection" };
+    }
+  }
+
+  return { status: "cancelled" };
 }

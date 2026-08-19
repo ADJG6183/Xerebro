@@ -83,6 +83,48 @@ describe("linkBankAccount", () => {
     });
   });
 
+  it("NO-REDIRECT PATH: user closes Plaid's completion screen -> server confirms the link", async () => {
+    // Hosted Link without a registered redirect URI never returns a public
+    // token to the device. Before this path existed, closing that window
+    // silently threw away a SUCCESSFUL bank connection.
+    const asked: string[] = [];
+    const transport: SyncTransport = {
+      ...baseTransport,
+      async createLinkToken() {
+        return { linkToken: "link-sandbox-999", expiration: "", hostedLinkUrl: "https://secure.plaid.com/hl/x" };
+      },
+      async exchangePublicToken() {
+        throw new Error("must not be called — device never saw a public token");
+      },
+      async completeLink(linkToken) {
+        asked.push(linkToken);
+        return { linked: true, itemId: "item-77" };
+      },
+    };
+    // "dismiss" = the user closed the window themselves.
+    const outcome = await linkBankAccount(transport, opener({ type: "dismiss" }), REDIRECT);
+    expect(outcome).toEqual({ status: "linked", itemId: "item-77" });
+    expect(asked).toEqual(["link-sandbox-999"]); // asked the SERVER, not the device
+  });
+
+  it("NO-REDIRECT PATH: a genuinely abandoned session stays cancelled", async () => {
+    const transport: SyncTransport = {
+      ...baseTransport,
+      async createLinkToken() {
+        return { linkToken: "link-sandbox-999", expiration: "", hostedLinkUrl: "https://secure.plaid.com/hl/x" };
+      },
+      async exchangePublicToken() {
+        throw new Error("not called");
+      },
+      async completeLink() {
+        return { linked: false }; // Plaid has no completed session
+      },
+    };
+    expect(await linkBankAccount(transport, opener({ type: "dismiss" }), REDIRECT)).toEqual({
+      status: "cancelled",
+    });
+  });
+
   it("treats a dismissed Link session as a cancel, not an error", async () => {
     const transport: SyncTransport = {
       ...baseTransport,
