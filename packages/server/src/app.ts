@@ -92,6 +92,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
    * bearer token, NEVER from the request. Every route except /auth/* and
    * /webhooks/* (which verifies itself Plaid's way) requires one.
    */
+  // REQUEST LOG — dev visibility into what the app actually calls. Logs
+  // method/path/status/duration only; never bodies (they carry financial
+  // data and tokens, docs/SecurityPrivacy.md).
+  app.addHook("onResponse", async (request, reply) => {
+    console.log(
+      `${request.method} ${request.url.split("?")[0]} -> ${reply.statusCode} (${Math.round(reply.elapsedTime)}ms)`,
+    );
+  });
+
   app.decorateRequest("session", null);
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? "";
