@@ -18,6 +18,7 @@ import { syncPlaidItem, type AclDeps } from "./plaid/acl";
 import { syncPlaidBalances } from "./plaid/balances";
 import { classifyAggregatorError } from "./plaid/errors";
 import type { PlaidLinkGateway } from "./plaid/gateway";
+import { InMemoryLinkTokenOwners, type LinkTokenOwners } from "./plaid/stores";
 
 /**
  * Plaid webhook authenticity check. MUST be replaced with Plaid's JWT
@@ -43,6 +44,9 @@ export interface AppDeps extends AclDeps {
   /** Absent = bank linking not configured; /plaid/* returns 503 and the app
    * stays manual-only. */
   plaidLink?: PlaidLinkGateway;
+  /** Who each link token was issued to, so /plaid/complete can reject one
+   * that isn't the caller's. Defaults to an in-memory map. */
+  linkTokenOwners?: LinkTokenOwners;
 }
 
 /** Paths that authenticate themselves differently (or not yet). */
@@ -70,6 +74,7 @@ interface UserEventsBody {
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
+  const linkTokenOwners = deps.linkTokenOwners ?? new InMemoryLinkTokenOwners();
 
   // Keep the raw JSON bytes alongside the parsed body: Plaid's webhook
   // signature covers a hash of exactly what was sent, so re-serializing
@@ -177,7 +182,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
     const { userId } = sessionOf(request);
     try {
-      return reply.send(await deps.plaidLink.createLinkToken(userId));
+      const created = await deps.plaidLink.createLinkToken(userId);
+      // Bind the token to its requester; /plaid/complete checks this.
+      await linkTokenOwners.remember(created.linkToken, userId);
+      return reply.send(created);
     } catch {
       return reply.code(502).send({ error: "could not start bank linking" });
     }
@@ -197,10 +205,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
     const { linkToken } = request.body ?? {};
     if (!linkToken) return reply.code(400).send({ error: "linkToken required" });
+    const { userId } = sessionOf(request);
+    // Authorization first, before anything about this server's capabilities
+    // is revealed. A link token is only completable by the user it was
+    // issued to — otherwise a stolen one would attach someone else's bank
+    // to this account. Unknown tokens (expired, or predating a restart) are
+    // refused for the same reason.
+    if ((await linkTokenOwners.ownerOf(linkToken)) !== userId) {
+      return reply.code(403).send({ error: "link token is not yours" });
+    }
     if (!deps.plaidLink.getLinkSessionPublicToken) {
       return reply.code(501).send({ error: "session lookup not supported" });
     }
-    const { userId } = sessionOf(request);
 
     try {
       const publicToken = await deps.plaidLink.getLinkSessionPublicToken(linkToken);

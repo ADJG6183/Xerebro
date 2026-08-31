@@ -297,10 +297,14 @@ export class PostgresItemStore implements ItemStore {
 
   async put(item: PlaidItem): Promise<void> {
     await this.pool.query(
+      // Re-linking the same item refreshes its token and cursor, but an
+      // item's OWNER is immutable: the WHERE makes a put by anyone else
+      // update zero rows rather than silently stealing the connection.
       `INSERT INTO plaid_items (item_id, user_id, access_token_ref, cursor)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (item_id) DO UPDATE
-         SET user_id = $2, access_token_ref = $3, cursor = $4`,
+         SET access_token_ref = $3, cursor = $4
+         WHERE plaid_items.user_id = $2`,
       [item.itemId, item.userId, item.accessTokenRef, item.cursor],
     );
   }

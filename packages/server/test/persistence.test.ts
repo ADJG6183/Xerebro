@@ -16,7 +16,7 @@ import {
   PostgresTxnRegistry,
 } from "../src/persistence/postgres";
 import { authStoreContract } from "./authContract";
-import { eventStoreContract } from "./storeContract";
+import { eventStoreContract, itemStoreContract } from "./storeContract";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -42,6 +42,19 @@ describe.skipIf(!url)("postgres persistence", () => {
       appendBatch: (u, e, b) => inner.appendBatch(prefix + u, e, b),
       eventsSince: (u, s, l) => inner.eventsSince(prefix + u, s, l),
       lastSequence: (u) => inner.lastSequence(prefix + u),
+    };
+  });
+
+  // Same namespacing trick: unique item ids per run so repeated runs against
+  // a live database don't collide.
+  let itemN = 0;
+  itemStoreContract("postgres", async () => {
+    const inner = new PostgresItemStore(createPoolLazy());
+    const prefix = `${runId}-${++itemN}:`;
+    return {
+      get: (id) => inner.get(prefix + id),
+      put: (item) => inner.put({ ...item, itemId: prefix + item.itemId }),
+      setCursor: (id, c) => inner.setCursor(prefix + id, c),
     };
   });
 

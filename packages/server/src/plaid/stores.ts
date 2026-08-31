@@ -19,6 +19,52 @@ export interface ItemStore {
 }
 
 /**
+ * Remembers which user a link token was issued to, so /plaid/complete can
+ * refuse a token that isn't the caller's. Without this, anyone holding a
+ * link token could complete someone else's bank connection into their own
+ * account (docs/SecurityPrivacy.md).
+ *
+ * Deliberately in-memory: link tokens expire in ~4h, so a restart only means
+ * the user re-links. That is a far better failure mode than a new table.
+ */
+export interface LinkTokenOwners {
+  remember(linkToken: string, userId: string): Promise<void>;
+  ownerOf(linkToken: string): Promise<string | undefined>;
+}
+
+/** Link tokens Plaid issues are valid ~4h; forget ours a little after that. */
+const LINK_TOKEN_TTL_MS = 5 * 60 * 60 * 1000;
+
+export class InMemoryLinkTokenOwners implements LinkTokenOwners {
+  private readonly owners = new Map<string, { userId: string; expiresAt: number }>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  async remember(linkToken: string, userId: string) {
+    this.sweep();
+    this.owners.set(linkToken, { userId, expiresAt: this.now() + LINK_TOKEN_TTL_MS });
+  }
+
+  async ownerOf(linkToken: string) {
+    const entry = this.owners.get(linkToken);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= this.now()) {
+      this.owners.delete(linkToken);
+      return undefined;
+    }
+    return entry.userId;
+  }
+
+  /** Bounded memory: drop expired entries whenever we add one. */
+  private sweep() {
+    const now = this.now();
+    for (const [token, entry] of this.owners) {
+      if (entry.expiresAt <= now) this.owners.delete(token);
+    }
+  }
+}
+
+/**
  * Which canonical transaction ids a user already has, plus the alias from a
  * posted Plaid id back to the canonical (originally pending) id. Needed for
  * the pending→posted rewrite (docs/adr/ADR-003-events.md).
@@ -36,6 +82,9 @@ export class InMemoryItemStore implements ItemStore {
     return this.items.get(itemId);
   }
   async put(item: PlaidItem) {
+    // Ownership is immutable — mirrors the Postgres adapter's guarded upsert.
+    const existing = this.items.get(item.itemId);
+    if (existing && existing.userId !== item.userId) return;
     this.items.set(item.itemId, { ...item });
   }
   async setCursor(itemId: string, cursor: string) {

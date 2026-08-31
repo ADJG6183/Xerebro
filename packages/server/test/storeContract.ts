@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { EventStore, UnsequencedEvent } from "../src/eventStore";
+import type { ItemStore } from "../src/plaid/stores";
 
 function event(n: number, key?: string): UnsequencedEvent {
   return {
@@ -83,6 +84,40 @@ export function eventStoreContract(name: string, make: () => Promise<EventStore>
       );
       const all = await store.eventsSince("u1", 0);
       expect(all.map((e) => e.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    });
+  });
+}
+
+/**
+ * THE item store contract. The security-critical rule: an item's owner is
+ * immutable, so a second user cannot take over an existing bank connection.
+ */
+export function itemStoreContract(name: string, make: () => Promise<ItemStore>) {
+  describe(`ItemStore contract: ${name}`, () => {
+    const item = {
+      itemId: "item-1",
+      userId: "user-a",
+      accessTokenRef: "sealed-a",
+      cursor: "",
+    };
+
+    it("stores an item and updates it for its owner", async () => {
+      const store = await make();
+      await store.put(item);
+      await store.put({ ...item, accessTokenRef: "sealed-a2", cursor: "c1" });
+
+      const stored = await store.get("item-1");
+      expect(stored).toMatchObject({ userId: "user-a", accessTokenRef: "sealed-a2", cursor: "c1" });
+    });
+
+    it("SECURITY: refuses to reassign an item to another user", async () => {
+      const store = await make();
+      await store.put(item);
+      await store.put({ ...item, userId: "user-b", accessTokenRef: "sealed-b" });
+
+      const stored = await store.get("item-1");
+      expect(stored?.userId).toBe("user-a"); // owner unchanged
+      expect(stored?.accessTokenRef).toBe("sealed-a"); // and not overwritten
     });
   });
 }

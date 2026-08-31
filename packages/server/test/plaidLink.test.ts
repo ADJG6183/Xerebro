@@ -12,8 +12,12 @@ import { createTokenVault, TokenVaultError } from "../src/plaid/tokenVault";
 import { syncPlaidBalances } from "../src/plaid/balances";
 import { toAccountType } from "../src/plaid/balances";
 import { makeDeps, page, registerHeaders } from "./helpers";
+import { InMemoryItemStore } from "../src/plaid/stores";
+import { itemStoreContract } from "./storeContract";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
+
+itemStoreContract("in-memory", async () => new InMemoryItemStore());
 
 const ACCOUNT: PlaidAccount = {
   account_id: "plaid-acct-1",
@@ -149,6 +153,62 @@ describe("link routes", () => {
       headers: auth.headers,
     });
     expect(unconfigured.statusCode).toBe(503);
+  });
+
+  it("SECURITY: a link token can only be completed by the user it was issued to", async () => {
+    // The attack this prevents: attacker gets hold of a victim's link token
+    // and calls /plaid/complete with their OWN login, attaching the victim's
+    // bank to the attacker's account.
+    const deps = await makeDeps({ "": page({}, "c1") });
+    const gateway = linkGateway();
+    gateway.getLinkSessionPublicToken = async () => "public-sandbox-xyz";
+    deps.plaidLink = gateway;
+    deps.plaid.accountsBalanceGet = async () => [ACCOUNT];
+    const app = buildApp(deps);
+
+    const victim = await registerHeaders(app);
+    const attacker = await registerHeaders(app);
+
+    const issued = await app.inject({
+      method: "POST",
+      url: "/plaid/link-token",
+      headers: victim.headers,
+    });
+    const { linkToken } = issued.json();
+
+    const stolen = await app.inject({
+      method: "POST",
+      url: "/plaid/complete",
+      headers: attacker.headers,
+      payload: { linkToken },
+    });
+    expect(stolen.statusCode).toBe(403);
+    expect(gateway.exchanged).toEqual([]); // never even asked Plaid
+
+    // The rightful owner still completes normally.
+    const ok = await app.inject({
+      method: "POST",
+      url: "/plaid/complete",
+      headers: victim.headers,
+      payload: { linkToken },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect((await deps.items.get("item-new"))?.userId).toBe(victim.userId);
+  });
+
+  it("SECURITY: an unknown or expired link token is refused", async () => {
+    const deps = await makeDeps({});
+    deps.plaidLink = linkGateway();
+    const app = buildApp(deps);
+    const auth = await registerHeaders(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/plaid/complete",
+      headers: auth.headers,
+      payload: { linkToken: "link-sandbox-never-issued" },
+    });
+    expect(res.statusCode).toBe(403);
   });
 
   it("rejects an exchange with no public token", async () => {
