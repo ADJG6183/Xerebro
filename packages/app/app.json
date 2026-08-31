@@ -28,6 +28,12 @@
       "expo-secure-store",
       "expo-dev-client"
     ],
-    "scheme": "xerebro"
+    "scheme": "xerebro",
+    "extra": {
+      "eas": {
+        "projectId": "31f3eb9a-5f42-462f-bdd6-2fc874c844d7"
+      }
+    },
+    "owner": "aarongreen6183"
   }
 }
