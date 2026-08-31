@@ -101,6 +101,22 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     );
   });
 
+  // On error responses only, also log OUR OWN diagnostic payload (error +
+  // failure classification) — never a request body, never financial data.
+  // Surfaces WHY a call failed instead of just that it did (was invisible
+  // during the Plaid link debugging: every 502 looked identical in the log).
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (reply.statusCode >= 400 && typeof payload === "string") {
+      try {
+        const body = JSON.parse(payload);
+        if (body.error) console.log(`  ↳ ${body.error}${body.failure ? ` [${body.failure.code ?? body.failure.kind}]` : ""}`);
+      } catch {
+        // non-JSON error body; nothing to add
+      }
+    }
+    return payload;
+  });
+
   app.decorateRequest("session", null);
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? "";
@@ -203,6 +219,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return reply.send({ linked: true, itemId, balances, transactions });
     } catch (err) {
       const failure = classifyAggregatorError(err);
+      // The classifier's "kind" is intentionally a small, stable vocabulary
+      // for the CLIENT — but it collapses real detail. Log the raw message
+      // here (server-only, dev visibility) so an unrecognized/network error
+      // is diagnosable instead of just "transient".
+      console.log(`  ↳ /plaid/complete raw error: ${err instanceof Error ? err.message : String(err)}`);
       return reply.code(502).send({ error: "could not finish linking", failure });
     }
   });

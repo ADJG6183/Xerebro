@@ -64,6 +64,7 @@ export function createPlaidHttpClient(config: PlaidConfig) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const startedAt = Date.now();
       try {
         const res = await fetch(`${BASE_URL[config.env]}${path}`, {
           method: "POST",
@@ -77,7 +78,10 @@ export function createPlaidHttpClient(config: PlaidConfig) {
           signal: controller.signal,
         });
 
-        if (res.ok) return (await res.json()) as T;
+        if (res.ok) {
+          console.log(`  ↳ plaid ${path} attempt ${attempt} OK in ${Date.now() - startedAt}ms`);
+          return (await res.json()) as T;
+        }
 
         const detail = (await res.json().catch(() => ({}))) as {
           error_code?: string;
@@ -93,6 +97,7 @@ export function createPlaidHttpClient(config: PlaidConfig) {
         if (!isTransient(res.status)) throw error;
         lastError = error;
       } catch (err) {
+        console.log(`  ↳ plaid ${path} attempt ${attempt} FAILED after ${Date.now() - startedAt}ms: ${err instanceof Error ? err.message : String(err)}`);
         if (err instanceof PlaidApiError && !isTransient(err.status)) throw err;
         lastError = err;
       } finally {
@@ -180,13 +185,20 @@ export function plaidHttpLinkGateway(config: PlaidConfig): PlaidLinkGateway {
 
     async getLinkSessionPublicToken(linkToken) {
       const res = await call<{
-        link_sessions?: { results?: { item_add_result?: { public_token?: string } }[] }[];
+        link_sessions?: {
+          // Plaid's REAL shape (verified against a live sandbox response,
+          // 2026-08-31): `results` is a SINGLE object per session, not an
+          // array, and the field is `item_add_results` (plural, an array) —
+          // not the singular `item_add_result` the docs implied when this
+          // was first written. Getting this wrong threw "object is not
+          // iterable" on every completed link.
+          results?: { item_add_results?: { public_token?: string }[] };
+        }[];
       }>("/link/token/get", { link_token: linkToken });
       // Newest session first; a finished bank-add carries the public token.
       for (const session of [...(res.link_sessions ?? [])].reverse()) {
-        for (const result of session.results ?? []) {
-          const token = result.item_add_result?.public_token;
-          if (token) return token;
+        for (const result of session.results?.item_add_results ?? []) {
+          if (result.public_token) return result.public_token;
         }
       }
       return null;
