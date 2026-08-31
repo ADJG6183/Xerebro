@@ -132,10 +132,13 @@ export function plaidHttpGateway(config: PlaidConfig): PlaidGateway {
         ...(cursor ? { cursor } : {}),
         count: 500,
       });
+      // Array.isArray, not `?? []`: the link bug was a field that was
+      // PRESENT but the wrong shape, which `??` waves through and the ACL
+      // then crashes on. Guard the type, not just the absence.
       return {
-        added: page.added ?? [],
-        modified: page.modified ?? [],
-        removed: page.removed ?? [],
+        added: Array.isArray(page.added) ? page.added : [],
+        modified: Array.isArray(page.modified) ? page.modified : [],
+        removed: Array.isArray(page.removed) ? page.removed : [],
         next_cursor: page.next_cursor,
         has_more: page.has_more,
       } satisfies PlaidSyncPage;
@@ -145,7 +148,7 @@ export function plaidHttpGateway(config: PlaidConfig): PlaidGateway {
       const res = await call<{ accounts: PlaidAccount[] }>("/accounts/balance/get", {
         access_token: accessToken,
       });
-      return res.accounts ?? [];
+      return Array.isArray(res.accounts) ? res.accounts : [];
     },
   };
 }

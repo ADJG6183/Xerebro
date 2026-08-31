@@ -28,7 +28,7 @@ import {
 
 const NOW = "2026-07-12T10:00:00.000Z";
 
-function makeServer() {
+async function makeServer() {
   let n = 0;
   const deps: AppDeps = {
     plaid: { transactionsSync: async () => { throw new Error("unused"); } },
@@ -43,10 +43,10 @@ function makeServer() {
       newId: (() => { let a = 0; return () => (++a % 2 === 1 ? `user-${(a + 1) / 2}` : `device-${a / 2}`); })(),
     }),
   };
-  return { deps, app: buildApp(deps) };
+  return { deps, app: await buildApp(deps) };
 }
 
-function injectTransport(app: ReturnType<typeof buildApp>): SyncTransport {
+function injectTransport(app: Awaited<ReturnType<typeof buildApp>>): SyncTransport {
   let tokenPromise: Promise<string> | null = null;
   const token = () =>
     (tokenPromise ??= app
@@ -91,7 +91,7 @@ function makeFlow(transport: SyncTransport): DecisionFlowDeps {
 
 describe("manual entry feeds the decision engine", () => {
   it("adding a large bill flips a $600 purchase from approve to decline", async () => {
-    const { app } = makeServer();
+    const { app } = await makeServer();
     const transport = injectTransport(app);
     const flow = makeFlow(transport);
 
@@ -130,7 +130,7 @@ describe("manual entry feeds the decision engine", () => {
   });
 
   it("a bucket allocation reduces available cash the decision sees", async () => {
-    const { app } = makeServer();
+    const { app } = await makeServer();
     const transport = injectTransport(app);
     const flow = makeFlow(transport);
 

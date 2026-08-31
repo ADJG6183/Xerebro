@@ -37,7 +37,7 @@ function scriptedGateway(text: string): LlmGateway & { prompts: string[] } {
   };
 }
 
-function appWith(llm?: LlmGateway) {
+async function appWith(llm?: LlmGateway) {
   let authN = 0;
   const deps: AppDeps = {
     plaid: { transactionsSync: async () => { throw new Error("unused"); } },
@@ -53,10 +53,11 @@ function appWith(llm?: LlmGateway) {
     }),
     ...(llm ? { llm } : {}),
   };
-  return buildApp(deps);
+  return await buildApp(deps);
 }
 
-async function injectExplain(app: ReturnType<typeof buildApp>, payload: unknown) {
+async function injectExplain(pending: ReturnType<typeof appWith>, payload: unknown) {
+  const app = await pending;
   const { headers } = await registerHeaders(app);
   return app.inject({ method: "POST", url: "/explanations", payload: payload as object, headers });
 }

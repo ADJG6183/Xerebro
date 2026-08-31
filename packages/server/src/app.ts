@@ -4,6 +4,7 @@
  * app with fakes at the seams.
  */
 import { validateEventPayload } from "@xerebro/engines";
+import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { AuthSession, AuthStore } from "./auth/store";
 import { answerQuestion } from "./copilot/chat";
@@ -72,9 +73,18 @@ interface UserEventsBody {
   events?: UnsequencedEvent[];
 }
 
-export function buildApp(deps: AppDeps): FastifyInstance {
+export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const linkTokenOwners = deps.linkTokenOwners ?? new InMemoryLinkTokenOwners();
+
+  // Rate limiting. Generous by default (personal-scale server, and the app
+  // syncs in bursts), strict on the routes where guessing pays. AWAITED on
+  // purpose: per-route config is only honoured if the plugin is loaded
+  // before the routes below are defined — hence buildApp being async.
+  await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
+
+  /** For routes where a wrong answer is worth retrying: 10 tries a minute. */
+  const strictLimit = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
 
   // Keep the raw JSON bytes alongside the parsed body: Plaid's webhook
   // signature covers a hash of exactly what was sent, so re-serializing
@@ -134,13 +144,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   /** Anonymous device registration (staged auth — identity linking later). */
-  app.post<{ Body: { deviceName?: string } }>("/auth/register", async (request, reply) => {
+  app.post<{ Body: { deviceName?: string } }>("/auth/register", strictLimit, async (request, reply) => {
     const result = await deps.auth.registerDevice(request.body?.deviceName ?? "unnamed device");
     return reply.code(201).send(result);
   });
 
   /** Rotate the token pair. 401 = invalid/expired/stolen → client re-registers. */
-  app.post<{ Body: { refreshToken?: string } }>("/auth/refresh", async (request, reply) => {
+  app.post<{ Body: { refreshToken?: string } }>("/auth/refresh", strictLimit, async (request, reply) => {
     const { refreshToken } = request.body ?? {};
     if (!refreshToken) return reply.code(400).send({ error: "refreshToken required" });
     const result = await deps.auth.refresh(refreshToken);
@@ -201,7 +211,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
    * link token it started with, we ask Plaid whether it finished, and then
    * exchange server-side exactly as the redirect path would have.
    */
-  app.post<{ Body: { linkToken?: string } }>("/plaid/complete", async (request, reply) => {
+  app.post<{ Body: { linkToken?: string } }>("/plaid/complete", strictLimit, async (request, reply) => {
     if (!deps.plaidLink) return reply.code(503).send({ error: "bank linking not configured" });
     const { linkToken } = request.body ?? {};
     if (!linkToken) return reply.code(400).send({ error: "linkToken required" });

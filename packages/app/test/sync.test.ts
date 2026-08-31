@@ -19,7 +19,7 @@ import { pullOnce, pushUserEvents, type SyncTransport } from "../src/data/syncCl
 import { buildDashboardViewModel } from "../src/data/dashboardModel";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "../src/data/userEvents";
 
-function makeServer(): { deps: AppDeps; app: ReturnType<typeof buildApp> } {
+async function makeServer(): Promise<{ deps: AppDeps; app: Awaited<ReturnType<typeof buildApp>> }> {
   let n = 0;
   const deps: AppDeps = {
     plaid: {
@@ -38,12 +38,12 @@ function makeServer(): { deps: AppDeps; app: ReturnType<typeof buildApp> } {
       newId: (() => { let a = 0; return () => (++a % 2 === 1 ? `user-${(a + 1) / 2}` : `device-${a / 2}`); })(),
     }),
   };
-  return { deps, app: buildApp(deps) };
+  return { deps, app: await buildApp(deps) };
 }
 
 /** The app's SyncTransport driven through the real HTTP layer via inject.
  * Registers lazily; every call carries the bearer token. */
-function injectTransport(app: ReturnType<typeof buildApp>): SyncTransport {
+function injectTransport(app: Awaited<ReturnType<typeof buildApp>>): SyncTransport {
   let tokenPromise: Promise<string> | null = null;
   const token = () =>
     (tokenPromise ??= app
@@ -119,7 +119,7 @@ function demoEvents(deps: EventFactoryDeps) {
 
 describe("device ↔ server sync spine", () => {
   it("push from phone A, pull on phone B: both compute the IDENTICAL dashboard", async () => {
-    const { app } = makeServer();
+    const { app } = await makeServer();
     const transport = injectTransport(app);
 
     const phoneA = new InMemoryDeviceLog();
@@ -139,7 +139,7 @@ describe("device ↔ server sync spine", () => {
   });
 
   it("re-pushing after a dropped connection appends nothing (producer idempotency)", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const transport = injectTransport(app);
     const phone = new InMemoryDeviceLog();
 
@@ -152,7 +152,7 @@ describe("device ↔ server sync spine", () => {
   });
 
   it("pull is paginated and catches up in one call", async () => {
-    const { app } = makeServer();
+    const { app } = await makeServer();
     const transport = injectTransport(app);
     const seeder = new InMemoryDeviceLog();
 

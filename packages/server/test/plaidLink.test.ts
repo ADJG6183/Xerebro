@@ -105,7 +105,7 @@ describe("link routes", () => {
   it("issues a link token for the authenticated user", async () => {
     const deps = await makeDeps({});
     deps.plaidLink = linkGateway();
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const auth = await registerHeaders(app);
 
     const res = await app.inject({ method: "POST", url: "/plaid/link-token", headers: auth.headers });
@@ -120,7 +120,7 @@ describe("link routes", () => {
     deps.plaidLink = gateway;
     deps.tokens = createTokenVault(KEY);
     deps.plaid.accountsBalanceGet = async () => [ACCOUNT];
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const auth = await registerHeaders(app);
 
     const res = await app.inject({
@@ -141,7 +141,7 @@ describe("link routes", () => {
   });
 
   it("requires auth, and degrades to 503 when linking isn't configured", async () => {
-    const app = buildApp(await makeDeps({})); // no plaidLink
+    const app = await buildApp(await makeDeps({})); // no plaidLink
     const auth = await registerHeaders(app);
 
     const unauth = await app.inject({ method: "POST", url: "/plaid/link-token" });
@@ -164,7 +164,7 @@ describe("link routes", () => {
     gateway.getLinkSessionPublicToken = async () => "public-sandbox-xyz";
     deps.plaidLink = gateway;
     deps.plaid.accountsBalanceGet = async () => [ACCOUNT];
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
 
     const victim = await registerHeaders(app);
     const attacker = await registerHeaders(app);
@@ -199,7 +199,7 @@ describe("link routes", () => {
   it("SECURITY: an unknown or expired link token is refused", async () => {
     const deps = await makeDeps({});
     deps.plaidLink = linkGateway();
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const auth = await registerHeaders(app);
 
     const res = await app.inject({
@@ -214,7 +214,7 @@ describe("link routes", () => {
   it("rejects an exchange with no public token", async () => {
     const deps = await makeDeps({});
     deps.plaidLink = linkGateway();
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",

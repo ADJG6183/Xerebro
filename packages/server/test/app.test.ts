@@ -7,7 +7,7 @@ describe("HTTP surface (real app, fake seams)", () => {
     const deps = await makeDeps({
       "": page({ added: [plaidTxn({ transaction_id: "t-1" })] }, "c1"),
     });
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
 
     const webhook = await app.inject({
       method: "POST",
@@ -34,7 +34,7 @@ describe("HTTP surface (real app, fake seams)", () => {
   });
 
   it("unknown webhook kinds are acked (202), never errors — aggregators retry on 5xx", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const res = await app.inject({
       method: "POST",
       url: "/webhooks/plaid",
@@ -45,7 +45,7 @@ describe("HTTP surface (real app, fake seams)", () => {
   });
 
   it("POST /items/:id/refresh drains sync on demand; aggregator failure maps to 502", async () => {
-    const app = buildApp(
+    const app = await buildApp(
       await makeDeps({ "": page({ added: [plaidTxn({ transaction_id: "t-r" })] }, "c1") }),
     );
     const owner = await registerHeaders(app); // user-1 owns item-1
@@ -53,7 +53,7 @@ describe("HTTP surface (real app, fake seams)", () => {
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toMatchObject({ appended: 1 });
 
-    const failing = buildApp(await makeDeps({})); // fake gateway has no page scripted → throws
+    const failing = await buildApp(await makeDeps({})); // fake gateway has no page scripted → throws
     const failOwner = await registerHeaders(failing);
     const bad = await failing.inject({ method: "POST", url: "/items/item-1/refresh", headers: failOwner.headers });
     expect(bad.statusCode).toBe(502);
@@ -68,7 +68,7 @@ describe("HTTP surface (real app, fake seams)", () => {
   it("rejects unverified webhooks with 401", async () => {
     const deps = await makeDeps({});
     deps.webhookVerifier = { verify: async () => false };
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const res = await app.inject({
       method: "POST",
       url: "/webhooks/plaid",
@@ -78,7 +78,7 @@ describe("HTTP surface (real app, fake seams)", () => {
   });
 
   it("device events up: appends with producer idempotency, resend is a no-op", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const auth = await registerHeaders(app);
     const annotation = {
       eventId: "dev-evt-1",
@@ -107,7 +107,7 @@ describe("HTTP surface (real app, fake seams)", () => {
 
   it("rejects poison payloads at the door: float money → 400, nothing appended", async () => {
     const deps = await makeDeps({});
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",
@@ -135,7 +135,7 @@ describe("HTTP surface (real app, fake seams)", () => {
   });
 
   it("rejects nested float money hidden inside an audit-record payload", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",
@@ -156,7 +156,7 @@ describe("HTTP surface (real app, fake seams)", () => {
   });
 
   it("rejects device events that claim a non-user source (spoofed provenance)", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const auth = await registerHeaders(app);
     const res = await app.inject({
       method: "POST",

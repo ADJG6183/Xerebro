@@ -25,7 +25,7 @@ function scriptedGateway(route: object, phrase: string): LlmGateway {
   };
 }
 
-function makeServer(llm: LlmGateway) {
+async function makeServer(llm: LlmGateway) {
   let a = 0;
   const events = new InMemoryEventStore();
   const deps: AppDeps = {
@@ -39,11 +39,11 @@ function makeServer(llm: LlmGateway) {
     auth: new InMemoryAuthStore({ now: () => "2026-07-12T10:00:00.000Z", newId: () => `id-${++a}` }),
     llm,
   };
-  return { app: buildApp(deps), events };
+  return { app: await buildApp(deps), events };
 }
 
 /** A transport.chat() implemented over the real server via inject. */
-function chatVia(app: ReturnType<typeof buildApp>, token: string) {
+function chatVia(app: Awaited<ReturnType<typeof buildApp>>, token: string) {
   return async (question: string, todayLocal: string): Promise<CopilotAnswer> => {
     const res = await app.inject({
       method: "POST",
@@ -62,7 +62,7 @@ describe("copilot transport contract", () => {
       { tool: "financial_summary", args: {} },
       "You have $5,000.00 available and a net worth of $5,000.00.",
     );
-    const { app, events } = makeServer(gw);
+    const { app, events } = await makeServer(gw);
     const reg = await app.inject({ method: "POST", url: "/auth/register", payload: {} });
     const { accessToken, userId } = reg.json() as { accessToken: string; userId: string };
 

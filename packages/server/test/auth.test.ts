@@ -19,7 +19,7 @@ const EVENT = {
 
 describe("token auth", () => {
   it("no token → 401 on every protected route", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     for (const [method, url] of [
       ["GET", "/events?since=0"],
       ["POST", "/events"],
@@ -32,7 +32,7 @@ describe("token auth", () => {
   });
 
   it("ISOLATION: user B's token cannot read user A's events", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const a = await registerHeaders(app); // user-1
     const b = await registerHeaders(app); // user-2
 
@@ -46,7 +46,7 @@ describe("token auth", () => {
   });
 
   it("ISOLATION: you cannot refresh another user's bank connection", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     await registerHeaders(app); // user-1 owns item-1 (seeded in helpers)
     const b = await registerHeaders(app); // user-2
     const res = await app.inject({ method: "POST", url: "/items/item-1/refresh", headers: b.headers });
@@ -54,7 +54,7 @@ describe("token auth", () => {
   });
 
   it("refresh rotates the pair; the old access token stops working", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const first = await registerHeaders(app);
 
     const rotated = await app.inject({
@@ -74,7 +74,7 @@ describe("token auth", () => {
   });
 
   it("THEFT SIGNAL: replaying a rotated-out refresh token revokes the device", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const first = await registerHeaders(app);
 
     const rotated = await app.inject({
@@ -108,12 +108,30 @@ describe("token auth", () => {
   });
 
   it("garbage and expired-format tokens are just 401s, never errors", async () => {
-    const app = buildApp(await makeDeps({}));
+    const app = await buildApp(await makeDeps({}));
     const res = await app.inject({
       method: "GET",
       url: "/events?since=0",
       headers: { authorization: "Bearer xat_totally-made-up" },
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe("rate limiting", () => {
+  it("SECURITY: caps repeated tries at the guess-prone routes", async () => {
+    // Without this, token/link-token guessing is limited only by bandwidth.
+    // The plugin must be LOADED before routes are defined for per-route
+    // config to apply — the reason buildApp is async.
+    const app = await buildApp(await makeDeps({}));
+    await app.ready();
+
+    const codes: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const res = await app.inject({ method: "POST", url: "/auth/register", payload: {} });
+      codes.push(res.statusCode);
+    }
+    expect(codes.filter((c) => c === 201)).toHaveLength(10);
+    expect(codes.at(-1)).toBe(429);
   });
 });

@@ -26,7 +26,7 @@ function scriptedGateway(route: object, phrase: string): LlmGateway & { prompts:
 }
 
 let authN = 0;
-function appWith(llm?: LlmGateway) {
+async function appWith(llm?: LlmGateway) {
   authN = 0;
   const events = new InMemoryEventStore();
   const deps: AppDeps = {
@@ -40,7 +40,7 @@ function appWith(llm?: LlmGateway) {
     auth: new InMemoryAuthStore({ now: () => "2026-07-12T10:00:00.000Z", newId: () => `id-${++authN}` }),
     ...(llm ? { llm } : {}),
   };
-  return { app: buildApp(deps), events };
+  return { app: await buildApp(deps), events };
 }
 
 function txnEvent(txnId: string, amountMinor: number, postedDate: string, category: string): UnsequencedEvent {
@@ -84,7 +84,7 @@ describe("POST /chat", () => {
       { tool: "spend_total", args: JUNE },
       "You spent $98.42 across June.",
     );
-    const { app, events } = appWith(gw);
+    const { app, events } = await appWith(gw);
     const auth = await registerHeaders(app);
     await seed(events, auth.userId);
 
@@ -104,7 +104,7 @@ describe("POST /chat", () => {
 
   it("ALLOWLIST: raw transactions never appear in any prompt the model sees", async () => {
     const gw = scriptedGateway({ tool: "spend_by_category", args: JUNE }, "Groceries $68.42, Dining $30.00.");
-    const { app, events } = appWith(gw);
+    const { app, events } = await appWith(gw);
     const auth = await registerHeaders(app);
     await seed(events, auth.userId);
 
@@ -127,7 +127,7 @@ describe("POST /chat", () => {
       { tool: "spend_total", args: JUNE },
       "You spent $98.42 — about $500.00 more than average.", // $500 invented
     );
-    const { app, events } = appWith(gw);
+    const { app, events } = await appWith(gw);
     const auth = await registerHeaders(app);
     await seed(events, auth.userId);
 
@@ -145,7 +145,7 @@ describe("POST /chat", () => {
 
   it("out-of-scope question (router picks null) → helpful boundary message", async () => {
     const gw = scriptedGateway({ tool: null }, "irrelevant");
-    const { app, events } = appWith(gw);
+    const { app, events } = await appWith(gw);
     const auth = await registerHeaders(app);
     await seed(events, auth.userId);
 
@@ -160,7 +160,7 @@ describe("POST /chat", () => {
   });
 
   it("no provider → 503; unauthenticated → 401; bad input → 400", async () => {
-    const noLlm = appWith();
+    const noLlm = await appWith();
     const authed = await registerHeaders(noLlm.app);
     expect(
       (await noLlm.app.inject({
@@ -171,7 +171,7 @@ describe("POST /chat", () => {
       })).statusCode,
     ).toBe(503);
 
-    const { app } = appWith(scriptedGateway({ tool: null }, "x"));
+    const { app } = await appWith(scriptedGateway({ tool: null }, "x"));
     expect(
       (await app.inject({ method: "POST", url: "/chat", payload: { question: "hi", todayLocal: "2026-07-12" } }))
         .statusCode,

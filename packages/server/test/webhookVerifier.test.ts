@@ -91,7 +91,7 @@ describe("plaid webhook verification", () => {
   it("END TO END: the route accepts a signed webhook and rejects an unsigned one", async () => {
     const deps = await makeDeps({ "": page({ added: [plaidTxn({ transaction_id: "t-1" })] }, "c1") });
     deps.webhookVerifier = verifier;
-    const app = buildApp(deps);
+    const app = await buildApp(deps);
     const payload = { webhook_type: "TRANSACTIONS", webhook_code: "SYNC_UPDATES_AVAILABLE", item_id: "item-1" };
     const raw = JSON.stringify(payload);
 

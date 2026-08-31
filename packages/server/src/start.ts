@@ -81,7 +81,7 @@ const tokens = process.env.PLAID_TOKEN_KEY
   ? createTokenVault(process.env.PLAID_TOKEN_KEY)
   : PLAINTEXT_DEV_VAULT;
 
-const app = buildApp({
+const app = await buildApp({
   ...(llm ? { llm } : {}),
   plaid: plaidConfig
     ? plaidHttpGateway(plaidConfig)

@@ -29,7 +29,7 @@ import { accountUpserted, manualTransaction, type EventFactoryDeps } from "../sr
 
 const NOW = "2026-07-07T10:00:00.000Z";
 
-function makeServer() {
+async function makeServer() {
   let n = 0;
   let authN = 0;
   const deps: AppDeps = {
@@ -51,11 +51,11 @@ function makeServer() {
       newId: () => (++authN % 2 === 1 ? `user-${(authN + 1) / 2}` : `device-${authN / 2}`),
     }),
   };
-  return { deps, app: buildApp(deps) };
+  return { deps, app: await buildApp(deps) };
 }
 
 /** Registers lazily on first use; every call carries the bearer token. */
-function injectTransport(app: ReturnType<typeof buildApp>): SyncTransport {
+function injectTransport(app: Awaited<ReturnType<typeof buildApp>>): SyncTransport {
   let tokenPromise: Promise<string> | null = null;
   const token = () =>
     (tokenPromise ??= app
@@ -127,7 +127,7 @@ function makeFlow(transport: SyncTransport): DecisionFlowDeps {
 
 describe("runPurchaseCheck", () => {
   it("manual-only state is freshness-exempt: VERIFIED despite week-old entry timestamps", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const flow = makeFlow(injectTransport(app));
     await seedManualAccount(flow); // $5,000 − $1,200 = $3,800 available
 
@@ -150,7 +150,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("stale aggregator data triggers the refresh-race; fresh balance arrives and verifies", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const base = injectTransport(app);
 
     // Refresh simulates the coming balance-sync: server appends a fresh AccountUpserted.
@@ -223,7 +223,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("refresh timeout → CANT_VERIFY: answer renders, labeled, never fabricated", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const base = injectTransport(app);
     const transport: SyncTransport = {
       ...base,
@@ -267,7 +267,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("submitFeedback lands a FeedbackSubmitted event in the server log", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const flow = makeFlow(injectTransport(app));
     await seedManualAccount(flow);
     const result = await runPurchaseCheck(flow, 60_000);
@@ -283,7 +283,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("beat 2: faithful LLM text upgrades the prose and lands an amendment event", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const base = injectTransport(app);
     const transport: SyncTransport = {
       ...base,
@@ -312,7 +312,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("beat 2: unfaithful LLM text is rejected ON DEVICE — no upgrade, no amendment", async () => {
-    const { app, deps } = makeServer();
+    const { app, deps } = await makeServer();
     const base = injectTransport(app);
     const transport: SyncTransport = {
       ...base,
@@ -336,7 +336,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("beat 2: proxy absent or failing → null; the template stands", async () => {
-    const { app } = makeServer();
+    const { app } = await makeServer();
     const flow = makeFlow(injectTransport(app)); // no getExplanation on transport
     await seedManualAccount(flow);
     const result = await runPurchaseCheck(flow, 60_000);
@@ -352,7 +352,7 @@ describe("runPurchaseCheck", () => {
   });
 
   it("decline path: buffer math shows in the explanation", async () => {
-    const { app } = makeServer();
+    const { app } = await makeServer();
     const flow = makeFlow(injectTransport(app));
     await seedManualAccount(flow, 130_000); // $1,300 − $1,200 rent = $100 available
 

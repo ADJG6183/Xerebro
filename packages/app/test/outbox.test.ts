@@ -24,7 +24,7 @@ import { accountUpserted, manualTransaction, type EventFactoryDeps } from "../sr
 const NOW = "2026-07-10T10:00:00.000Z";
 const TODAY = "2026-07-10";
 
-function makeServer() {
+async function makeServer() {
   let n = 0;
   const deps: AppDeps = {
     plaid: { transactionsSync: async () => { throw new Error("unused"); } },
@@ -39,11 +39,11 @@ function makeServer() {
       newId: (() => { let a = 0; return () => (++a % 2 === 1 ? `user-${(a + 1) / 2}` : `device-${a / 2}`); })(),
     }),
   };
-  return { deps, app: buildApp(deps) };
+  return { deps, app: await buildApp(deps) };
 }
 
 /** Transport with a network switch: offline() throws on every call. */
-function switchableTransport(app: ReturnType<typeof buildApp>) {
+function switchableTransport(app: Awaited<ReturnType<typeof buildApp>>) {
   let online = true;
   let tokenPromise: Promise<string> | null = null;
   const token = () =>
@@ -107,7 +107,7 @@ function demoEvents(deps: EventFactoryDeps) {
 
 describe("offline outbox", () => {
   it("offline action → queued + optimistic dashboard; reconnect → flush → server parity", async () => {
-    const { app, deps: server } = makeServer();
+    const { app, deps: server } = await makeServer();
     const { transport, setOnline } = switchableTransport(app);
     const log = new InMemoryDeviceLog();
     const outbox = new InMemoryOutbox();
@@ -143,7 +143,7 @@ describe("offline outbox", () => {
   });
 
   it("ambiguous failure (server applied, response lost) → flush retry does NOT duplicate", async () => {
-    const { app, deps: server } = makeServer();
+    const { app, deps: server } = await makeServer();
     const { transport } = switchableTransport(app);
     const log = new InMemoryDeviceLog();
     const outbox = new InMemoryOutbox();
@@ -168,7 +168,7 @@ describe("offline outbox", () => {
   });
 
   it("purchase check fully offline: verdict renders, audit record queued, flush lands it", async () => {
-    const { app, deps: server } = makeServer();
+    const { app, deps: server } = await makeServer();
     const { transport, setOnline } = switchableTransport(app);
     const flow: DecisionFlowDeps = {
       log: new InMemoryDeviceLog(),
