@@ -13,7 +13,9 @@
 import { formatMinor } from "../money";
 import type { PurchaseDecision } from "../decision/purchaseApproval";
 
-const MONEY_FIGURE = /\$\s?([\d,]+(?:\.\d{1,2})?)/g;
+// Any common currency symbol, not just "$": an invented "€349.99" is exactly
+// as fabricated as an invented "$349.99" (found by the eval harness).
+const MONEY_FIGURE = /[$€£¥]\s?([\d,]+(?:\.\d{1,2})?)/g;
 
 /** Normalized dollar strings (no "$", no spaces) appearing in text. */
 export function moneyFiguresIn(text: string): string[] {
@@ -62,7 +64,17 @@ export function checkChatFaithful(text: string, figures: readonly number[]): Fai
 const VERDICT_FORBIDDEN: Record<PurchaseDecision["decision"], RegExp[]> = {
   approve: [/hold off/i, /can'?t afford/i, /cannot afford/i],
   caution: [/^yes[^,]/i, /easily afford/i],
-  decline: [/you can afford/i, /go for it/i, /^yes\b/i],
+  decline: [
+    /you can afford/i,
+    /go for it/i,
+    /^yes\b/i,
+    // Inversions that carry no figures and no explicit "yes" — found by the
+    // eval harness, which accepted "Sure, go ahead — treat yourself."
+    /\bgo ahead\b/i,
+    /\btreat yourself\b/i,
+    /^sure\b/i,
+    /within reach/i,
+  ],
 };
 
 export interface FaithfulnessResult {

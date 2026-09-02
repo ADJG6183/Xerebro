@@ -7,7 +7,8 @@
   "types": "src/index.ts",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval:faithfulness": "vite-node src/explanation/eval/report.ts"
   },
   "devDependencies": {
     "fast-check": "^4.1.1",
