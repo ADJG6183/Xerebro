@@ -9,6 +9,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { PlanViewModel } from "../data/planModel";
 import { parseDollarsToMinor, parseLocalDate } from "../data/money";
+import { humanizeCategory } from "./categoryDisplay";
 import { LabeledInput, PrimaryButton } from "./forms";
 import { theme } from "./theme";
 
@@ -22,13 +23,20 @@ export interface NewBill {
   expectedAmountMinor: number;
   nextDue: string;
 }
+export interface NewBudget {
+  categoryId: string;
+  limitMinor: number;
+}
 
 export function BudgetScreen(props: {
   vm: PlanViewModel;
   onAddBucket: (b: NewBucket) => void;
   onAddBill: (b: NewBill) => void;
+  onAddBudget: (b: NewBudget) => void;
+  /** Spec §6: "Tapping a row opens scoped spending detail." */
+  onOpenCategory: (categoryId: string) => void;
 }) {
-  const [adding, setAdding] = useState<"none" | "bucket" | "bill">("none");
+  const [adding, setAdding] = useState<"none" | "bucket" | "bill" | "budget">("none");
   const { vm } = props;
 
   return (
@@ -36,7 +44,56 @@ export function BudgetScreen(props: {
       <Text style={styles.title}>Budget</Text>
 
       <SectionHeader
-        title="Buckets"
+        title="Monthly limits"
+        meta={vm.budgets.length > 0 ? `for ${vm.budgetMonth}` : "no limits set yet"}
+        onAdd={() => setAdding(adding === "budget" ? "none" : "budget")}
+      />
+      {adding === "budget" && (
+        <BudgetForm
+          onSubmit={(b) => {
+            props.onAddBudget(b);
+            setAdding("none");
+          }}
+        />
+      )}
+      <View style={styles.card}>
+        {vm.budgets.length === 0 ? (
+          <Text style={styles.empty}>
+            No monthly limits yet. A limit compares your spending to a target — it never
+            reserves cash the way a bucket does.
+          </Text>
+        ) : (
+          vm.budgets.map((b) => (
+            <Pressable key={b.budgetPlanId} onPress={() => props.onOpenCategory(b.categoryId)}>
+              <View style={styles.bucketRow}>
+                <View style={styles.bucketTop}>
+                  <Text style={styles.rowName}>{humanizeCategory(b.categoryId)}</Text>
+                  <Text style={[styles.rowAmount, b.overLimit && styles.overLimitText]}>
+                    {b.spentFormatted} / {b.limitFormatted}
+                  </Text>
+                </View>
+                <View style={styles.track}>
+                  <View
+                    style={[
+                      styles.fill,
+                      b.overLimit && styles.fillOver,
+                      { width: `${Math.min(100, b.progressPercent)}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={[styles.remainingLabel, b.overLimit && styles.overLimitText]}>
+                  {b.overLimit ? `${b.remainingFormatted} over` : `${b.remainingFormatted} remaining`}
+                  {b.pendingFormatted ? ` · ${b.pendingFormatted} pending` : ""}
+                  {!b.enabled ? " · tracking off" : ""}
+                </Text>
+              </View>
+            </Pressable>
+          ))
+        )}
+      </View>
+
+      <SectionHeader
+        title="Reserved savings"
         meta={`${vm.totalAllocatedFormatted} allocated`}
         onAdd={() => setAdding(adding === "bucket" ? "none" : "bucket")}
       />
@@ -116,6 +173,38 @@ function SectionHeader(props: { title: string; meta: string; onAdd: () => void }
       <Pressable style={styles.addBtn} onPress={props.onAdd} hitSlop={8}>
         <Ionicons name="add" size={20} color={theme.primary} />
       </Pressable>
+    </View>
+  );
+}
+
+function BudgetForm({ onSubmit }: { onSubmit: (b: NewBudget) => void }) {
+  const [category, setCategory] = useState("");
+  const [limit, setLimit] = useState("");
+  const limitMinor = parseDollarsToMinor(limit);
+  const valid = category.trim() !== "" && limitMinor !== null && limitMinor > 0;
+
+  return (
+    <View style={styles.form}>
+      <LabeledInput
+        label="Category"
+        value={category}
+        onChangeText={setCategory}
+        placeholder="Dining"
+        autoFocus
+      />
+      <LabeledInput
+        label="Monthly limit"
+        value={limit}
+        onChangeText={setLimit}
+        placeholder="$400.00"
+        keyboardType="numbers-and-punctuation"
+        invalid={limit.length > 0 && (limitMinor === null || limitMinor <= 0)}
+      />
+      <PrimaryButton
+        label="Save limit"
+        disabled={!valid}
+        onPress={() => valid && onSubmit({ categoryId: category.trim(), limitMinor: limitMinor! })}
+      />
     </View>
   );
 }
@@ -229,6 +318,9 @@ const styles = StyleSheet.create({
   rowAmount: { fontSize: 14, fontWeight: "700", color: theme.ink },
   track: { height: 8, borderRadius: 4, backgroundColor: theme.chipBg, overflow: "hidden" },
   fill: { height: 8, borderRadius: 4, backgroundColor: theme.primary },
+  fillOver: { backgroundColor: theme.outflow },
+  overLimitText: { color: theme.outflow },
+  remainingLabel: { fontSize: 12, color: theme.slate, marginTop: 6 },
   billRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
   iconChip: {
     width: 40,

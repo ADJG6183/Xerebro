@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { buildSnapshot, type EventEnvelope } from "@xerebro/engines";
 import { buildDashboardViewModel } from "../src/data/dashboardModel";
-import { InMemoryDeviceLog } from "../src/data/deviceLog";
+import { InMemoryDeviceLog, type DeviceEventLog } from "../src/data/deviceLog";
 import { createProjectionCache } from "../src/data/projectionCache";
 import { accountUpserted, manualTransaction, type EventFactoryDeps } from "../src/data/userEvents";
 
@@ -123,5 +123,38 @@ describe("projection cache", () => {
     cache.invalidate();
     const rebuilt = await cache.current(log);
     expect(rebuilt).toEqual(buildSnapshot(await log.all()));
+  });
+
+  it("reads only the delta via since(), never reloading already-folded history", async () => {
+    const log = new InMemoryDeviceLog();
+    const sinceArgs: number[] = [];
+    const sinceCounts: number[] = [];
+    let allCalls = 0;
+    const counting: DeviceEventLog = {
+      lastSequence: () => log.lastSequence(),
+      append: (events) => log.append(events),
+      all: () => {
+        allCalls += 1;
+        return log.all();
+      },
+      since: async (after) => {
+        sinceArgs.push(after);
+        const events = await log.since(after);
+        sinceCounts.push(events.length);
+        return events;
+      },
+    };
+    const cache = createProjectionCache();
+
+    await log.append(sequenced([ACCOUNT, txn("t-1", -1_000)]));
+    await cache.current(counting);
+    await log.append(sequenced([txn("t-2", -2_000)], 2));
+    await cache.current(counting);
+    await log.append(sequenced([txn("t-3", -3_000)], 3));
+    await cache.current(counting);
+
+    expect(allCalls).toBe(0); // the cache never falls back to the full-log read
+    expect(sinceArgs).toEqual([0, 2, 3]); // asked only for what's new each time
+    expect(sinceCounts).toEqual([2, 1, 1]); // and got only that much back
   });
 });

@@ -24,6 +24,8 @@ describe("token auth", () => {
       ["GET", "/events?since=0"],
       ["POST", "/events"],
       ["POST", "/items/item-1/refresh"],
+      ["GET", "/items"],
+      ["POST", "/items/item-1/disconnect"],
       ["POST", "/explanations"],
     ] as const) {
       const res = await app.inject({ method, url, payload: {} });

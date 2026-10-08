@@ -100,4 +100,32 @@ describe("verification scoring (docs/verificationEngine.md)", () => {
     expect(r.status).toBe("NEEDS_USER_INPUT");
     expect(r.missingInputs).toEqual(["upcomingObligationsMinor"]);
   });
+
+  it("unknown required reconciliation cannot be called verified", () => {
+    const r = verifyHighStakes({
+      dataAgeSeconds: 0,
+      requiredInputs: ["availableCashMinor"],
+      snapshot: { availableCashMinor: 500_000 },
+      reconciliationRequired: true,
+    });
+
+    expect(r.status).toBe("CANT_VERIFY");
+    expect(r.boundedBy).toBe("reconciliation");
+    expect(r.reason).toContain("not established");
+  });
+
+  it("explicit data-quality issues block verification without asking the user to invent data", () => {
+    const r = verifyHighStakes({
+      dataAgeSeconds: 0,
+      requiredInputs: ["availableCashMinor"],
+      snapshot: { availableCashMinor: 500_000 },
+      driftMinor: 0,
+      reportedBalanceMinor: 500_000,
+      dataQualityIssues: ["Unsupported currency: EUR"],
+    });
+
+    expect(r.status).toBe("CANT_VERIFY");
+    expect(r.boundedBy).toBe("data_quality");
+    expect(r.reason).toContain("EUR");
+  });
 });

@@ -9,17 +9,27 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import type { AuthSession, AuthStore } from "./auth/store";
 import { answerQuestion } from "./copilot/chat";
 import type { UnsequencedEvent } from "./eventStore";
+import { EventSequenceConflict } from "./eventStore";
+import { ContinuityError, parseContinuityCommand, reviewAccountHistory } from "./accountContinuity";
 import {
   explainDecision,
   UnfaithfulExplanationError,
   type ExplainRequest,
 } from "./llm/explain";
 import type { LlmGateway } from "./llm/gateway";
-import { syncPlaidItem, type AclDeps } from "./plaid/acl";
-import { syncPlaidBalances } from "./plaid/balances";
+import type { AclDeps } from "./plaid/acl";
 import { classifyAggregatorError } from "./plaid/errors";
 import type { PlaidLinkGateway } from "./plaid/gateway";
-import { InMemoryLinkTokenOwners, type LinkTokenOwners } from "./plaid/stores";
+import { PlaidApiError } from "./plaid/httpGateway";
+import { processPlaidJob } from "./plaid/lifecycle";
+import {
+  InMemoryLinkTokenOwners,
+  InMemoryPlaidConnectionLifecycleStore,
+  InMemoryPlaidJobStore,
+  type LinkTokenOwners,
+  type PlaidConnectionLifecycleStore,
+  type PlaidJobStore,
+} from "./plaid/stores";
 
 /**
  * Plaid webhook authenticity check. MUST be replaced with Plaid's JWT
@@ -48,6 +58,9 @@ export interface AppDeps extends AclDeps {
   /** Who each link token was issued to, so /plaid/complete can reject one
    * that isn't the caller's. Defaults to an in-memory map. */
   linkTokenOwners?: LinkTokenOwners;
+  /** Durable in production; in-memory default keeps embedded/test assemblies small. */
+  jobs?: PlaidJobStore;
+  connectionLifecycle?: PlaidConnectionLifecycleStore;
 }
 
 /** Paths that authenticate themselves differently (or not yet). */
@@ -67,15 +80,61 @@ interface PlaidWebhookBody {
   webhook_type?: string;
   webhook_code?: string;
   item_id?: string;
+  error?: { error_code?: string };
 }
 
 interface UserEventsBody {
   events?: UnsequencedEvent[];
 }
 
+const DEVICE_EVENT_TYPES = new Set([
+  "AccountUpserted",
+  "TransactionPosted",
+  "TransactionAnnotated",
+  "BucketUpserted",
+  "BillUpserted",
+  "BudgetPlanUpserted",
+  "GoalCreated",
+  "RecommendationRecorded",
+  "RecommendationExplanationAdded",
+  "FeedbackSubmitted",
+  "VoiceFactConfirmed",
+]);
+
+/** Devices submit user intent, never server/aggregator evidence. */
+function deviceEventViolation(event: UnsequencedEvent): string | undefined {
+  if (!DEVICE_EVENT_TYPES.has(event.type)) return `${event.type} is not writable by devices`;
+  if (typeof event.payload !== "object" || event.payload === null) return undefined;
+  const payload = event.payload as Record<string, unknown>;
+  if (event.type === "AccountUpserted") {
+    if (payload.source !== "manual") return "device accounts must have source 'manual'";
+    for (const protectedField of [
+      "plaidItemId",
+      "balanceAvailableMinor",
+      "balanceCurrentKnown",
+      "reconciliationStatus",
+      "reconciliationDriftMinor",
+      "mask",
+      "institutionName",
+    ]) {
+      if (payload[protectedField] !== undefined) {
+        return `device accounts cannot set ${protectedField}`;
+      }
+    }
+  }
+  if (event.type === "TransactionPosted" && payload.categorySource !== "user") {
+    return "device transactions must have categorySource 'user'";
+  }
+  return undefined;
+}
+
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const linkTokenOwners = deps.linkTokenOwners ?? new InMemoryLinkTokenOwners();
+  const jobs = deps.jobs ?? new InMemoryPlaidJobStore();
+  const lifecycleDeps = { ...deps, jobs };
+  const connectionLifecycle =
+    deps.connectionLifecycle ?? new InMemoryPlaidConnectionLifecycleStore(deps.items, jobs);
 
   // Rate limiting. Generous by default (personal-scale server, and the app
   // syncs in bursts), strict on the routes where guessing pays. AWAITED on
@@ -170,13 +229,38 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const ok = await deps.webhookVerifier.verify(request.headers as Record<string, unknown>, raw);
     if (!ok) return reply.code(401).send({ error: "webhook verification failed" });
 
-    const { webhook_type, webhook_code, item_id } = request.body ?? {};
+    const { webhook_type, webhook_code, item_id, error } = request.body ?? {};
+    if (webhook_type === "ITEM" && item_id) {
+      const item = await deps.items.get(item_id);
+      if (!item || item.status === "disconnecting" || item.status === "disconnected") return reply.code(202).send({ handled: false });
+      if (webhook_code === "LOGIN_REPAIRED") {
+        await deps.items.setStatus(item_id, "importing");
+        await jobs.enqueue(item_id, item.userId, "sync", deps.now());
+        return reply.code(202).send({ handled: true, queued: true });
+      }
+      const code = webhook_code === "PENDING_DISCONNECT" ? webhook_code : error?.error_code;
+      if (webhook_code === "ERROR" || webhook_code === "PENDING_DISCONNECT") {
+        if (!code) return reply.code(202).send({ handled: false });
+        const failure = classifyAggregatorError(new PlaidApiError("Plaid Item webhook", 400, code));
+        const status = failure.needsUserAction ? "reauthentication_needed" : "retry_needed";
+        await deps.items.setStatus(item_id, status, failure.userMessage);
+        if (failure.retryable) await jobs.enqueue(item_id, item.userId, "sync", deps.now());
+        return reply.code(202).send({ handled: true, queued: failure.retryable });
+      }
+      return reply.code(202).send({ handled: false });
+    }
     if (webhook_type !== "TRANSACTIONS" || !item_id) {
       return reply.code(202).send({ handled: false }); // unknown kinds are acked, not errors
     }
     if (webhook_code === "SYNC_UPDATES_AVAILABLE") {
-      const outcome = await syncPlaidItem(deps, item_id);
-      return reply.code(200).send({ handled: true, ...outcome });
+      const item = await deps.items.get(item_id);
+      if (!item || item.status === "disconnected" || item.status === "disconnecting") {
+        return reply.code(202).send({ handled: false });
+      }
+      await jobs.enqueue(item.itemId, item.userId, "sync", deps.now());
+      // Webhooks acknowledge after durable enqueue; the worker performs the
+      // bank calls outside Plaid's delivery timeout.
+      return reply.code(202).send({ handled: true, queued: true });
     }
     return reply.code(202).send({ handled: false });
   });
@@ -234,15 +318,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (!publicToken) return reply.code(202).send({ linked: false });
 
       const { accessToken, itemId } = await deps.plaidLink.exchangePublicToken(publicToken);
-      await deps.items.put({
-        itemId,
-        userId,
-        accessTokenRef: deps.tokens ? deps.tokens.seal(accessToken) : accessToken,
-        cursor: "",
-      });
-      const balances = await syncPlaidBalances(deps, itemId);
-      const transactions = await syncPlaidItem(deps, itemId);
-      return reply.send({ linked: true, itemId, balances, transactions });
+      await connectionLifecycle.startConnection(
+        {
+          itemId,
+          userId,
+          accessTokenRef: deps.tokens ? deps.tokens.seal(accessToken) : accessToken,
+          cursor: "",
+        },
+        deps.now(),
+      );
+      await processPlaidJob(lifecycleDeps, itemId, "sync", () => new Date(deps.now()));
+      await linkTokenOwners.forget(linkToken);
+      const item = await deps.items.get(itemId);
+      return reply.send({ linked: true, itemId, status: item?.status ?? "importing" });
     } catch (err) {
       const failure = classifyAggregatorError(err);
       // The classifier's "kind" is intentionally a small, stable vocabulary
@@ -262,18 +350,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
     try {
       const { accessToken, itemId } = await deps.plaidLink.exchangePublicToken(publicToken);
-      await deps.items.put({
-        itemId,
-        userId,
-        // Sealed at rest; opened only at the Plaid call site (tokenVault.ts).
-        accessTokenRef: deps.tokens ? deps.tokens.seal(accessToken) : accessToken,
-        cursor: "",
-      });
-      // First pull: balances (so the account appears) then transactions.
-      const balances = await syncPlaidBalances(deps, itemId);
-      const transactions = await syncPlaidItem(deps, itemId);
+      await connectionLifecycle.startConnection(
+        {
+          itemId,
+          userId,
+          // Sealed at rest; opened only at the Plaid call site (tokenVault.ts).
+          accessTokenRef: deps.tokens ? deps.tokens.seal(accessToken) : accessToken,
+          cursor: "",
+        },
+        deps.now(),
+      );
+      await processPlaidJob(lifecycleDeps, itemId, "sync", () => new Date(deps.now()));
       // NOTE: itemId only — the access token is never returned to the device.
-      return reply.send({ itemId, balances, transactions });
+      return reply.send({ itemId, status: (await deps.items.get(itemId))?.status ?? "importing" });
     } catch (err) {
       const failure = classifyAggregatorError(err);
       return reply.code(502).send({ error: "could not link bank", failure });
@@ -293,22 +382,63 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (!item || item.userId !== sessionOf(request).userId) {
       return reply.code(404).send({ error: "unknown item" });
     }
-    try {
-      // Balances first: they carry `balanceAsOf`, the freshness anchor the
-      // refresh-race is actually waiting on (docs/verificationEngine.md).
-      await syncPlaidBalances(deps, request.params.itemId);
-      const outcome = await syncPlaidItem(deps, request.params.itemId);
-      return reply.send(outcome);
-    } catch (err) {
-      // Semantic failure, not "something broke": the client renders
-      // userMessage and can prompt re-auth when only the user can fix it
-      // (docs/Reliability.md error classification).
-      const failure = classifyAggregatorError(err);
-      return reply.code(failure.kind === "reauth_required" ? 409 : 502).send({
-        error: "aggregator refresh failed",
-        failure,
-      });
+    if (item.status === "disconnected" || item.status === "disconnecting") {
+      return reply.code(409).send({ error: "item is disconnected" });
     }
+    await jobs.enqueue(item.itemId, item.userId, "sync", deps.now());
+    await processPlaidJob(lifecycleDeps, item.itemId, "sync", () => new Date(deps.now()));
+    const updated = await deps.items.get(item.itemId);
+    if (updated?.status === "ready") return reply.send({ queued: false, status: "ready" });
+    const failure = {
+      kind: updated?.status === "reauthentication_needed" ? "reauth_required" : "transient",
+      userMessage: updated?.lastError ?? "Your bank update is queued. We'll keep trying.",
+      retryable: updated?.status !== "reauthentication_needed",
+      needsUserAction: updated?.status === "reauthentication_needed",
+    };
+    return reply.code(updated?.status === "reauthentication_needed" ? 409 : 502).send({
+      error: "aggregator refresh failed",
+      failure,
+    });
+  });
+
+  /** Connection metadata only; secrets never leave the server. */
+  app.post("/accounts/history-review", strictLimit, async (request, reply) => {
+    try {
+      const command = parseContinuityCommand(request.body);
+      await reviewAccountHistory(deps, sessionOf(request).userId, command);
+      return reply.send({ status: "saved" });
+    } catch (error) {
+      if (error instanceof ContinuityError || error instanceof EventSequenceConflict) {
+        return reply.code(error instanceof ContinuityError ? error.statusCode : 409).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/items", async (request, reply) => {
+    const items = await deps.items.listForUser(sessionOf(request).userId);
+    return reply.send({
+      items: items.map((item) => ({
+        itemId: item.itemId,
+        status: item.status ?? "ready",
+        ...(item.lastError ? { message: item.lastError } : {}),
+      })),
+    });
+  });
+
+  app.post<{ Params: { itemId: string } }>("/items/:itemId/disconnect", strictLimit, async (request, reply) => {
+    const item = await deps.items.get(request.params.itemId);
+    if (!item || item.userId !== sessionOf(request).userId) {
+      return reply.code(404).send({ error: "unknown item" });
+    }
+    if (item.status === "disconnected") return reply.send({ status: "disconnected" });
+    await connectionLifecycle.requestDisconnect(item.itemId, item.userId, deps.now());
+    await processPlaidJob(lifecycleDeps, item.itemId, "disconnect", () => new Date(deps.now()));
+    const updated = await deps.items.get(item.itemId);
+    return reply.code(updated?.status === "disconnected" ? 200 : 202).send({
+      status: updated?.status ?? "disconnecting",
+      ...(updated?.lastError ? { message: updated.lastError } : {}),
+    });
   });
 
   /**
@@ -384,6 +514,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           .code(400)
           .send({ error: "device events must have source 'user', eventId, type, idempotencyKey" });
       }
+    }
+    const forbidden = events
+      .map((event) => deviceEventViolation(event))
+      .filter((violation): violation is string => violation !== undefined);
+    if (forbidden.length > 0) {
+      return reply.code(400).send({ error: "device event is not allowed", violations: forbidden });
     }
     // Poison-pill defense (engines/validation.ts): the log is append-only,
     // so malformed payloads are rejected AT THE DOOR — whole batch, atomically

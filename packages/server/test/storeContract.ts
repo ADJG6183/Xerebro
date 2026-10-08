@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { EventStore, UnsequencedEvent } from "../src/eventStore";
+import { EventSequenceConflict } from "../src/eventStore";
 import type { ItemStore } from "../src/plaid/stores";
 
 function event(n: number, key?: string): UnsequencedEvent {
@@ -22,6 +23,24 @@ function event(n: number, key?: string): UnsequencedEvent {
 
 export function eventStoreContract(name: string, make: () => Promise<EventStore>) {
   describe(`EventStore contract: ${name}`, () => {
+    it("atomically rejects stale decisions without recording their batch key", async () => {
+      const store = await make();
+      await store.appendBatch("u1", [event(1)], "base", 0);
+      await expect(store.appendBatch("u1", [event(2)], "review", 0)).rejects.toBeInstanceOf(EventSequenceConflict);
+      expect(await store.lastSequence("u1")).toBe(1);
+      expect((await store.appendBatch("u1", [event(2)], "review", 1)).appended).toHaveLength(1);
+      expect((await store.appendBatch("u1", [event(2)], "review", 1)).deduped).toBe(true);
+    });
+
+    it("only one concurrent decision can commit from the same snapshot", async () => {
+      const store = await make();
+      const results = await Promise.allSettled([
+        store.appendBatch("u1", [event(1)], "a", 0),
+        store.appendBatch("u1", [event(2)], "b", 0),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(await store.lastSequence("u1")).toBe(1);
+    });
     it("assigns gapless per-user sequences starting at 1", async () => {
       const store = await make();
       const a = await store.appendBatch("u1", [event(1), event(2)], "b1");
@@ -100,6 +119,16 @@ export function itemStoreContract(name: string, make: () => Promise<ItemStore>) 
       accessTokenRef: "sealed-a",
       cursor: "",
     };
+
+    it("late worker or webhook status changes cannot revive a disconnected item", async () => {
+      const store = await make(); await store.put(item);
+      await store.setStatus(item.itemId, "disconnecting");
+      await store.setStatus(item.itemId, "ready");
+      expect((await store.get(item.itemId))?.status).toBe("disconnecting");
+      await store.markDisconnected(item.itemId);
+      await store.setStatus(item.itemId, "retry_needed");
+      expect((await store.get(item.itemId))?.status).toBe("disconnected");
+    });
 
     it("stores an item and updates it for its owner", async () => {
       const store = await make();

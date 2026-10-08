@@ -67,6 +67,8 @@ export interface PlaidGateway {
   /** Current balances for an item's accounts. Optional: the fake gateways in
    * tests implement only what they exercise. */
   accountsBalanceGet?(accessTokenRef: string): Promise<PlaidAccount[]>;
+  /** Permanently revoke this Item's Plaid access. */
+  itemRemove?(accessTokenRef: string): Promise<void>;
 }
 
 /** Link-token issuing + public-token exchange — the connection handshake.

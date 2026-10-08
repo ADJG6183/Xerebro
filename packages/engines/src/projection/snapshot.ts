@@ -18,6 +18,7 @@
 import type { EventEnvelope, TransactionEvent } from "../events";
 import { foldAccounts, isAccountUpserted } from "./accounts";
 import { foldBills, foldBuckets } from "./plans";
+import { foldBudgetPlans, type BudgetPlan } from "./budget";
 import {
   applyEvents,
   emptyProjection,
@@ -26,6 +27,9 @@ import {
 import type { Account, Bill, Bucket } from "../state/financialState";
 
 export const TRANSACTION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "AccountContinuitySet",
+  "TransactionOverlapReviewed",
+  "BankSyncCompleted",
   "TransactionPosted",
   "TransactionUpdated",
   "TransactionRemoved",
@@ -37,6 +41,9 @@ export interface ProjectionSnapshot {
   accounts: readonly Account[];
   buckets: readonly Bucket[];
   bills: readonly Bill[];
+  /** Monthly category limits (projection/budget.ts) — never read by
+   * computeFinancialState; a reporting/comparison concept only. */
+  budgetPlans: readonly BudgetPlan[];
   /** The highest event sequence this snapshot reflects. */
   lastSequence: number;
 }
@@ -47,6 +54,7 @@ export function emptySnapshot(): ProjectionSnapshot {
     accounts: [],
     buckets: [],
     bills: [],
+    budgetPlans: [],
     lastSequence: 0,
   };
 }
@@ -73,6 +81,7 @@ export function advanceSnapshot(
     accounts: mergeById(snapshot.accounts, foldAccounts(fresh), (a) => a.accountId),
     buckets: mergeById(snapshot.buckets, foldBuckets(fresh), (b) => b.bucketId),
     bills: mergeById(snapshot.bills, foldBills(fresh), (b) => b.billId),
+    budgetPlans: mergeById(snapshot.budgetPlans, foldBudgetPlans(fresh), (p) => p.budgetPlanId),
     lastSequence: fresh.reduce((max, e) => Math.max(max, e.sequence), snapshot.lastSequence),
   };
 }
@@ -90,12 +99,13 @@ function mergeById<T>(existing: readonly T[], incoming: readonly T[], idOf: (t: 
   return [...byId.values()];
 }
 
-/** True when an event could change accounts/buckets/bills/transactions. */
+/** True when an event could change accounts/buckets/bills/budgetPlans/transactions. */
 export function affectsProjection(event: EventEnvelope): boolean {
   return (
     TRANSACTION_EVENT_TYPES.has(event.type) ||
     isAccountUpserted(event) ||
     event.type === "BucketUpserted" ||
-    event.type === "BillUpserted"
+    event.type === "BillUpserted" ||
+    event.type === "BudgetPlanUpserted"
   );
 }

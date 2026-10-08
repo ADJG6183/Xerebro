@@ -100,11 +100,17 @@ export function AskScreen(props: {
             {answer.manualDataOnly && (
               <Text style={styles.metaLine}>Based on your manually entered data</Text>
             )}
-            {answer.recordStatus === "queued" && (
-              <Text style={[styles.metaLine, { color: theme.amber }]}>
-                Saved on this device — syncs when you're back online
-              </Text>
-            )}
+            {/* The audit record is always just "queued" the instant this
+                renders (decisionFlow.ts intentionally returns before the
+                upload is even attempted, so the decision never waits on
+                network) — that is normal, not a warning. Use the real
+                offline signal (from the pull/refresh legs) to decide
+                whether this needs the cautionary phrasing and color. */}
+            <Text style={[styles.metaLine, answer.offline && { color: theme.amber }]}>
+              {answer.offline
+                ? "Saved on this device — syncs when you're back online"
+                : "Saved — uploading in the background"}
+            </Text>
             {answer.aggregatorFailure && (
               // Why the bank data may be stale, in words the user can act on
               // (docs/Reliability.md) — never a silent failure.

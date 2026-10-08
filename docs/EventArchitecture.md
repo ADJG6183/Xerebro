@@ -22,6 +22,12 @@ Manual transactions are ordinary `TransactionPosted` events with `source: "user"
 
 **System:** `InsightGenerated` · `NotificationSent` · `RulesUpdated` · `ParamsUpdated`
 
+**Reconnection continuity (ADR-007):** `BankSyncCompleted` (complete-import
+checkpoint), `AccountContinuitySet` (server proposal or user-confirmed identity),
+and `TransactionOverlapReviewed` (user-confirmed duplicate/separate/undo overlay).
+User decisions are emitted through authenticated server commands, not arbitrary
+device uploads. All three participate in the shared projection and replay.
+
 ## Rules
 
 - The log is append-only; removal is a `TransactionRemoved` event + tombstone, never a deletion.

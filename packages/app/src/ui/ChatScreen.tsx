@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { ChatMessage } from "../data/chat";
+import { formatLocalDate } from "../data/localDate";
 import type { SyncTransport } from "../data/syncClient";
 import { theme } from "./theme";
 
@@ -27,7 +28,14 @@ const SUGGESTIONS = [
   "What bills are due soon?",
 ];
 
-export function ChatScreen(props: { transport: SyncTransport; onBack: () => void }) {
+export function ChatScreen(props: {
+  transport: SyncTransport;
+  onBack: () => void;
+  /** Durable-but-unsynced device edits (outbox.ts). The copilot's tools read
+   * canonical SERVER data only (copilotArchitecture.md) — it cannot see
+   * these yet, so an answer can disagree with what Home shows right now. */
+  pendingCount: number;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,7 +53,7 @@ export function ChatScreen(props: { transport: SyncTransport; onBack: () => void
       setMessages((m) => [...m, userMsg, pending]);
 
       try {
-        const todayLocal = new Date().toISOString().slice(0, 10);
+        const todayLocal = formatLocalDate(new Date());
         const answer = await props.transport.chat(question, todayLocal);
         setMessages((m) =>
           m.map((msg) =>
@@ -84,6 +92,17 @@ export function ChatScreen(props: { transport: SyncTransport; onBack: () => void
         </View>
         <View style={{ width: 24 }} />
       </View>
+
+      {props.pendingCount > 0 && (
+        <View style={styles.pendingBanner}>
+          <Ionicons name="cloud-upload-outline" size={14} color={theme.amber} />
+          <Text style={styles.pendingBannerText}>
+            {props.pendingCount === 1
+              ? "1 change hasn't synced yet — answers may not reflect it."
+              : `${props.pendingCount} changes haven't synced yet — answers may not reflect them.`}
+          </Text>
+        </View>
+      )}
 
       {messages.length === 0 ? (
         <View style={styles.empty}>
@@ -164,6 +183,20 @@ const styles = StyleSheet.create({
   },
   headerTitleWrap: { flexDirection: "row", alignItems: "center", gap: 6 },
   title: { fontSize: 18, fontWeight: "800", color: theme.ink },
+  pendingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginHorizontal: 20,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: "#fffbeb",
+    borderWidth: 1,
+    borderColor: "#fde68a",
+  },
+  pendingBannerText: { flex: 1, fontSize: 12, color: theme.amber },
   empty: { flex: 1, paddingHorizontal: 24, justifyContent: "center" },
   emptyTitle: { fontSize: 20, fontWeight: "800", color: theme.ink, textAlign: "center" },
   emptySub: { fontSize: 13, color: theme.slate, textAlign: "center", marginTop: 8, marginBottom: 24 },

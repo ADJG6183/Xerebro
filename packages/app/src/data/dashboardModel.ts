@@ -12,12 +12,14 @@ import {
   computeFinancialState,
   effectiveTransactions,
   formatMinor,
+  type EffectiveTransaction,
   type EventEnvelope,
   type ProjectionSnapshot,
 } from "@xerebro/engines";
 
 export interface DashboardTxn {
   txnId: string;
+  accountId: string;
   merchant: string;
   /** Aggregator merchant logo; absent for manual entries and unresolved
    * merchants — the UI falls back to a category icon (ui/bits.tsx). */
@@ -27,6 +29,31 @@ export interface DashboardTxn {
   isInflow: boolean;
   date?: string;
   pending: boolean;
+  currency: string;
+  amountMinor: number;
+  historyExcluded: boolean;
+}
+
+/**
+ * The one place an EffectiveTransaction becomes a display row. Shared by the
+ * dashboard (below) and the Spending screen (spendingModel.ts) so the two
+ * never show the same transaction decorated two different ways.
+ */
+export function toDashboardTxn(t: EffectiveTransaction): DashboardTxn {
+  return {
+    txnId: t.txnId,
+    accountId: t.accountId,
+    merchant: `${t.effectiveMerchant}${t.historyExclusion === "confirmed_duplicate" ? " · Matched duplicate" : t.historyExclusion ? " · Needs review" : ""}`,
+    historyExcluded: !!t.historyExclusion,
+    ...(t.merchantLogoUrl !== undefined ? { logoUrl: t.merchantLogoUrl } : {}),
+    ...(t.effectiveCategory !== undefined ? { category: t.effectiveCategory } : {}),
+    amountFormatted: `${t.amountMinor > 0 ? "+" : ""}${formatMinor(t.amountMinor, t.currency)}`,
+    isInflow: t.amountMinor > 0,
+    ...(t.postedDate !== undefined ? { date: t.postedDate } : {}),
+    pending: t.status === "pending",
+    currency: t.currency,
+    amountMinor: t.amountMinor,
+  };
 }
 
 export interface TxnGroup {
@@ -44,6 +71,8 @@ export interface DashboardViewModel {
   incomeThisMonthFormatted: string;
   expensesThisMonthFormatted: string;
   dataAgeLabel: string;
+  /** Read-only totals may render with uncertainty, but never silently. */
+  balanceWarning?: string;
   recentTransactions: DashboardTxn[];
   /** All non-removed transactions, newest first, grouped by day (mockup: Transactions screen). */
   transactionGroups: TxnGroup[];
@@ -71,32 +100,23 @@ export function buildDashboardViewModel(input: {
 
   const state = computeFinancialState({ accounts, projection, buckets, bills, todayLocal });
 
-  const sorted = effectiveTransactions(projection)
+  const sorted = effectiveTransactions(projection, { includeExcluded: true })
     .sort((a, b) => (b.postedDate ?? "").localeCompare(a.postedDate ?? "") || b.lastSequence - a.lastSequence)
-    .map((t) => ({
-      txnId: t.txnId,
-      merchant: t.effectiveMerchant,
-      ...(t.merchantLogoUrl !== undefined ? { logoUrl: t.merchantLogoUrl } : {}),
-      ...(t.effectiveCategory !== undefined ? { category: t.effectiveCategory } : {}),
-      amountFormatted: `${t.amountMinor > 0 ? "+" : ""}${formatMinor(t.amountMinor)}`,
-      isInflow: t.amountMinor > 0,
-      ...(t.postedDate !== undefined ? { date: t.postedDate } : {}),
-      pending: t.status === "pending",
-      amountMinor: t.amountMinor,
-    }));
+    .map(toDashboardTxn);
 
   const month = todayLocal.slice(0, 7);
-  const inMonth = sorted.filter((t) => t.date?.startsWith(month));
+  const inMonth = sorted.filter((t) => !t.historyExcluded && t.currency === "USD" && t.date?.startsWith(month));
   const incomeMinor = inMonth.filter((t) => t.amountMinor > 0).reduce((a, t) => a + t.amountMinor, 0);
   const expensesMinor = inMonth.filter((t) => t.amountMinor < 0).reduce((a, t) => a - t.amountMinor, 0);
 
   const groups: TxnGroup[] = [];
-  for (const { amountMinor: _drop, ...txn } of sorted) {
+  for (const txn of sorted) {
     const label = dayLabel(txn.date, todayLocal);
     const last = groups[groups.length - 1];
     if (last && last.label === label) last.items.push(txn);
     else groups.push({ label, items: [txn] });
   }
+  const warning = balanceWarning(state);
 
   return {
     hasAccounts: accounts.length > 0,
@@ -105,14 +125,36 @@ export function buildDashboardViewModel(input: {
     upcomingObligationsFormatted: formatMinor(state.upcomingObligationsMinor),
     incomeThisMonthFormatted: formatMinor(incomeMinor),
     expensesThisMonthFormatted: formatMinor(expensesMinor),
-    dataAgeLabel: dataAgeLabel(state.dataAsOf, nowIso, accounts.length > 0),
+    dataAgeLabel: state.accountBalances.some((balance) => balance.source === "plaid")
+      ? dataAgeLabel(state.dataAsOf, nowIso, true)
+      : accounts.length > 0
+        ? "based on your manual entries"
+        : "no accounts yet",
+    ...(warning ? { balanceWarning: warning } : {}),
     recentTransactions: groups.flatMap((g) => g.items).slice(0, 5),
     transactionGroups: groups,
     lastSequence: state.lastSequence,
   };
 }
 
-function dayLabel(date: string | undefined, todayLocal: string): string {
+function balanceWarning(state: ReturnType<typeof computeFinancialState>): string | undefined {
+  if (state.historyWarnings.length) return state.historyWarnings[0];
+  if (state.unknownBalanceAccountIds.length > 0) return "Some bank balances are unavailable";
+  if (state.unsupportedCurrencyAccountIds.length > 0) return "Non-USD accounts are excluded";
+  if (state.unknownTypeAccountIds.length > 0) return "Unknown account types are excluded";
+  if (state.unsupportedCurrencyTransactionIds.length > 0) {
+    return "Non-USD transactions are excluded from USD totals";
+  }
+  if (state.overallocatedMinor > 0) return "Your bucket allocations exceed known cash";
+  if (state.accountBalances.some((balance) => balance.basis === "current_less_pending_outflows")) {
+    return "Estimated from current balance minus pending withdrawals";
+  }
+  if (state.reconciliationStatus === "unknown") return "Bank history is not yet reconciled";
+  if (state.reconciliationStatus === "failed") return "Bank balance reconciliation failed";
+  return undefined;
+}
+
+export function dayLabel(date: string | undefined, todayLocal: string): string {
   if (!date) return "Pending";
   if (date === todayLocal) return "Today";
   const yesterday = new Date(`${todayLocal}T12:00:00Z`);

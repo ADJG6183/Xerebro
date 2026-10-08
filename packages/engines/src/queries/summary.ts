@@ -4,6 +4,7 @@
  */
 import type { EventEnvelope, TransactionEvent } from "../events";
 import type { MinorUnits } from "../money";
+import { TRANSACTION_EVENT_TYPES } from "../projection/snapshot";
 import { sumMinor } from "../money";
 import { foldAccounts } from "../projection/accounts";
 import { foldBills, foldBuckets } from "../projection/plans";
@@ -19,19 +20,12 @@ import {
   type Bill,
 } from "../state/financialState";
 
-const TRANSACTION_TYPES = new Set([
-  "TransactionPosted",
-  "TransactionUpdated",
-  "TransactionRemoved",
-  "TransactionAnnotated",
-]);
-
 const LIABILITY_TYPES = new Set(["credit", "loan"]);
 
 function projectionOf(events: readonly EventEnvelope[]): TransactionProjection {
   return applyEvents(
     emptyProjection(),
-    events.filter((e): e is TransactionEvent => TRANSACTION_TYPES.has(e.type)),
+    events.filter((e): e is TransactionEvent => TRANSACTION_EVENT_TYPES.has(e.type)),
   );
 }
 
@@ -46,6 +40,8 @@ export interface FinancialSummary {
   availableCashMinor: MinorUnits;
   /** Assets minus liabilities across all active accounts. */
   netWorthMinor: MinorUnits;
+  /** Accounts intentionally excluded rather than silently treated as USD/known. */
+  excludedAccountIds: string[];
 }
 
 export function financialSummary(
@@ -62,14 +58,27 @@ export function financialSummary(
     todayLocal,
   });
 
-  const netWorthMinor = accounts
-    .filter((a) => a.status === "active")
+  const includedForNetWorth = accounts.filter(
+    (account) =>
+      account.status === "active" &&
+      account.currency === "USD" &&
+      account.type !== "unknown" &&
+      !(account.source === "plaid" && account.balanceCurrentKnown === false),
+  );
+  const netWorthMinor = includedForNetWorth
     .reduce((sum, a) => {
       const balance = currentBalance(a, projection);
       return sum + (LIABILITY_TYPES.has(a.type) ? -balance : balance);
     }, 0);
 
-  return { availableCashMinor: state.availableCashMinor, netWorthMinor };
+  const includedIds = new Set(includedForNetWorth.map((account) => account.accountId));
+  return {
+    availableCashMinor: state.availableCashMinor,
+    netWorthMinor,
+    excludedAccountIds: accounts
+      .filter((account) => account.status === "active" && !includedIds.has(account.accountId))
+      .map((account) => account.accountId),
+  };
 }
 
 export interface DueBill {

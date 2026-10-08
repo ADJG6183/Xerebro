@@ -12,8 +12,10 @@
  * type vocabulary die here, converted to integer minor units and our own
  * account types.
  */
-import type { Account, AccountType } from "@xerebro/engines";
+import { buildSnapshot, validateEventPayload, type Account, type AccountType } from "@xerebro/engines";
 import type { UnsequencedEvent } from "../eventStore";
+import { EventSequenceConflict } from "../eventStore";
+import { continuityProposals, readHistory } from "../accountContinuity";
 import { accessTokenOf, type AclDeps } from "./acl";
 import type { PlaidAccount } from "./gateway";
 
@@ -34,12 +36,16 @@ export function toAccountType(plaidType: string, subtype: string | null): Accoun
     // where Plaid returns a "Plaid CD" depository account.)
     return "investment";
   }
-  return "cash"; // unknown types are treated as plain cash, never dropped
+  return "unknown"; // retained for display, never assumed spendable
 }
 
 /** Float dollars → integer minor units; null stays null. */
 function toMinor(dollars: number | null): number | undefined {
-  return dollars === null ? undefined : Math.round(dollars * 100);
+  if (dollars === null) return undefined;
+  if (!Number.isFinite(dollars)) throw new TypeError("invalid Plaid balance");
+  const minor = Math.round(dollars * 100);
+  if (!Number.isSafeInteger(minor)) throw new TypeError("Plaid balance exceeds safe range");
+  return minor;
 }
 
 export function toAccountEvent(
@@ -54,14 +60,17 @@ export function toAccountEvent(
     type: toAccountType(plaidAccount.type, plaidAccount.subtype),
     source: "plaid",
     name: plaidAccount.name,
-    currency: plaidAccount.balances.iso_currency_code ?? "USD",
+    ...(plaidAccount.mask ? { mask: plaidAccount.mask } : {}),
+    currency: plaidAccount.balances.iso_currency_code ?? "UNKNOWN",
     balanceCurrentMinor: current,
+    ...(plaidAccount.balances.current === null ? { balanceCurrentKnown: false } : {}),
     ...(available !== undefined ? { balanceAvailableMinor: available } : {}),
     // The freshness anchor: when WE observed it, which is what verification
     // scores. Plaid doesn't promise a per-balance timestamp.
     balanceAsOf: observedAt,
     status: "active",
     plaidItemId: itemId,
+    reconciliationStatus: "unknown",
   };
 }
 
@@ -81,10 +90,14 @@ export async function syncPlaidBalances(
 ): Promise<BalanceSyncOutcome> {
   const item = await deps.items.get(itemId);
   if (!item) throw new Error(`unknown plaid item ${itemId}`);
+  if (item.status === "disconnecting" || item.status === "disconnected") {
+    throw new Error(`Plaid item ${itemId} is disconnected`);
+  }
   if (!deps.plaid.accountsBalanceGet) return { accounts: 0, appended: 0 };
 
   const observedAt = deps.now();
   const accounts = await deps.plaid.accountsBalanceGet(accessTokenOf(deps, item));
+  if (!Array.isArray(accounts)) throw new TypeError("invalid Plaid accounts balance response");
 
   const events: UnsequencedEvent[] = accounts.map((plaidAccount) => {
     const eventId = deps.newEventId();
@@ -99,11 +112,27 @@ export async function syncPlaidBalances(
     };
   });
 
+  const violations = events.flatMap((event) => validateEventPayload(event.type, event.payload));
+  if (violations.length > 0) throw new TypeError(`invalid normalized Plaid account: ${violations[0]}`);
+
   if (events.length === 0) return { accounts: 0, appended: 0 };
-  const result = await deps.events.appendBatch(
-    item.userId,
-    events,
-    `plaid-balances:${itemId}:${observedAt}`,
-  );
-  return { accounts: accounts.length, appended: result.appended.length };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const snapshot = buildSnapshot(await readHistory(deps.events, item.userId));
+    const latest = await deps.items.get(itemId);
+    if (!latest || latest.status === "disconnecting" || latest.status === "disconnected") throw new Error("Bank disconnected during refresh");
+    const proposals = continuityProposals(snapshot, events.map((event) => event.payload as Account));
+    const reviewEvents: UnsequencedEvent[] = proposals.map((payload) => ({
+      eventId: deps.newEventId(), type: "AccountContinuitySet", schemaVersion: 1,
+      occurredAt: observedAt, source: "system", idempotencyKey: `account-continuity:${payload.accountId}`, payload,
+    }));
+    try {
+      // Account facts and their guard arrive together, before any transactions.
+      const result = await deps.events.appendBatch(item.userId, [...events, ...reviewEvents],
+        `plaid-balances:${itemId}:${observedAt}`, snapshot.lastSequence);
+      return { accounts: accounts.length, appended: result.appended.length };
+    } catch (error) {
+      if (!(error instanceof EventSequenceConflict) || attempt === 2) throw error;
+    }
+  }
+  throw new EventSequenceConflict();
 }

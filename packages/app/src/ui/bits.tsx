@@ -5,7 +5,7 @@
  */
 import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import type { DashboardTxn } from "../data/dashboardModel";
 import { humanizeCategory, iconSpecFor } from "./categoryDisplay";
 import { theme } from "./theme";
@@ -46,9 +46,13 @@ export function CategoryIcon({ category, logoUrl }: { category?: string; logoUrl
   );
 }
 
-export function TxnRow({ txn }: { txn: DashboardTxn }) {
+export function TxnRow({ txn, onPress }: { txn: DashboardTxn; onPress?: (txnId: string) => void }) {
   return (
-    <View style={styles.txnRow}>
+    <Pressable
+      style={styles.txnRow}
+      onPress={onPress ? () => onPress(txn.txnId) : undefined}
+      disabled={!onPress}
+    >
       <CategoryIcon
         {...(txn.category !== undefined ? { category: txn.category } : {})}
         {...(txn.logoUrl !== undefined ? { logoUrl: txn.logoUrl } : {})}
@@ -65,7 +69,7 @@ export function TxnRow({ txn }: { txn: DashboardTxn }) {
       <Text style={[styles.txnAmount, { color: txn.isInflow ? theme.inflow : theme.outflow }]}>
         {txn.amountFormatted}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
 import { makeDeps, page, plaidTxn, registerHeaders } from "./helpers";
+import { processNextPlaidJob } from "../src/plaid/lifecycle";
 
 describe("HTTP surface (real app, fake seams)", () => {
   it("webhook → drain → events available on the device sync endpoint", async () => {
@@ -18,8 +19,9 @@ describe("HTTP surface (real app, fake seams)", () => {
         item_id: "item-1",
       },
     });
-    expect(webhook.statusCode).toBe(200);
-    expect(webhook.json()).toMatchObject({ handled: true, appended: 1 });
+    expect(webhook.statusCode).toBe(202);
+    expect(webhook.json()).toMatchObject({ handled: true, queued: true });
+    await processNextPlaidJob({ ...deps, jobs: deps.jobs! }, () => new Date(deps.now()));
 
     const auth = await registerHeaders(app);
     const sync = await app.inject({ method: "GET", url: "/events?since=0", headers: auth.headers });
@@ -51,7 +53,8 @@ describe("HTTP surface (real app, fake seams)", () => {
     const owner = await registerHeaders(app); // user-1 owns item-1
     const ok = await app.inject({ method: "POST", url: "/items/item-1/refresh", headers: owner.headers });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ appended: 1 });
+    expect(ok.json()).toMatchObject({ status: "ready", queued: false });
+    expect((await makeEventRead(app, owner.headers)).events).toHaveLength(1);
 
     const failing = await buildApp(await makeDeps({})); // fake gateway has no page scripted → throws
     const failOwner = await registerHeaders(failing);
@@ -178,4 +181,52 @@ describe("HTTP surface (real app, fake seams)", () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it("rejects a user event whose payload impersonates reconciled bank data", async () => {
+    const deps = await makeDeps({});
+    const app = await buildApp(deps);
+    const auth = await registerHeaders(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/events",
+      headers: auth.headers,
+      payload: {
+        events: [
+          {
+            eventId: "spoofed-account",
+            type: "AccountUpserted",
+            schemaVersion: 1,
+            occurredAt: "2026-09-05T12:00:00.000Z",
+            source: "user",
+            idempotencyKey: "spoofed-account-key",
+            payload: {
+              accountId: "fake-bank",
+              type: "checking",
+              source: "plaid",
+              name: "Fake Bank",
+              currency: "USD",
+              balanceCurrentMinor: 1_000_000,
+              balanceAvailableMinor: 1_000_000,
+              balanceAsOf: "2026-09-05T12:00:00.000Z",
+              status: "active",
+              plaidItemId: "fake-item",
+              reconciliationStatus: "reconciled",
+              reconciliationDriftMinor: 0,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(await deps.events.lastSequence("user-1")).toBe(0);
+  });
 });
+
+async function makeEventRead(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  headers: { authorization: string },
+): Promise<{ events: unknown[] }> {
+  const result = await app.inject({ method: "GET", url: "/events?since=0", headers });
+  return result.json();
+}

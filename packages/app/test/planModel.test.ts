@@ -56,4 +56,12 @@ describe("plan view-model", () => {
     expect(vm.bills[0]!.dueLabel).toBe("2 days overdue");
     expect(vm.bills[0]!.soon).toBe(true);
   });
+
+  it("an overdue bill still counts toward the 30-day total — an elapsed date is not payment", () => {
+    const events = sequenced([
+      billUpserted(deps, { billId: "late", name: "Gym", expectedAmountMinor: 3_000, nextDue: "2026-07-10" }),
+    ]);
+    const vm = buildPlanViewModel({ events, todayLocal: "2026-07-12" });
+    expect(vm.upcoming30dFormatted).toBe("$30.00");
+  });
 });

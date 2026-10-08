@@ -46,11 +46,11 @@ export function createProjectionCache(): ProjectionCache {
       committedKeys = new Set();
     }
 
-    // The DeviceEventLog contract exposes all(); advanceSnapshot skips events
-    // at or below the cached sequence, so the expensive part — the fold —
-    // still only runs on the delta.
-    const events = await log.all();
-    for (const e of events) if (e.sequence > snapshot.lastSequence) committedKeys.add(e.idempotencyKey);
+    // Indexed delta read (deviceLog.ts): only events past what's already
+    // folded are loaded/decrypted at all, not just folded — this is the
+    // O(new events) read the comment above promises, not O(all history).
+    const events = await log.since(snapshot.lastSequence);
+    for (const e of events) committedKeys.add(e.idempotencyKey);
     snapshot = advanceSnapshot(snapshot, events);
     return snapshot;
   }

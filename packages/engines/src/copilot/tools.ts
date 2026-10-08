@@ -11,6 +11,8 @@ import { formatMinor, type MinorUnits } from "../money";
 import type { EventEnvelope } from "../events";
 import { spendByCategory, spendTotal, topCategories } from "../queries/spending";
 import { billsDue, financialSummary } from "../queries/summary";
+import { buildSnapshot } from "../projection/snapshot";
+import { historyReviewIssues } from "../projection/continuity";
 
 export interface ToolContext {
   /** User's local "today" (YYYY-MM-DD) — engines never read a clock. */
@@ -124,6 +126,9 @@ export const TOOLS: ToolSpec[] = [
         data: {
           availableCash: formatMinor(s.availableCashMinor),
           netWorth: formatMinor(s.netWorthMinor),
+          ...(s.excludedAccountIds.length > 0
+            ? { warning: `${s.excludedAccountIds.length} account(s) excluded because their USD value is unknown` }
+            : {}),
         },
         figures: [s.availableCashMinor, s.netWorthMinor],
       };
@@ -169,5 +174,8 @@ export function dispatchTool(
 ): ToolResult {
   const tool = BY_NAME.get(toolName);
   if (!tool) throw new UnknownToolError(`unknown tool: ${toolName}`);
-  return tool.execute(events, args ?? {}, ctx);
+  const result = tool.execute(events, args ?? {}, ctx);
+  const warnings = historyReviewIssues(buildSnapshot(events).transactions);
+  if (warnings.length) result.data.warning = [result.data.warning, ...warnings].filter(Boolean).join(". ");
+  return result;
 }

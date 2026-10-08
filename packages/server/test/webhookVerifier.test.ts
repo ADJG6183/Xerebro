@@ -104,7 +104,7 @@ describe("plaid webhook verification", () => {
       headers: { "plaid-verification": signWebhook(raw), "content-type": "application/json" },
       payload: raw, // raw string: the signature covers these exact bytes
     });
-    expect(signed.statusCode).toBe(200);
-    expect(signed.json()).toMatchObject({ handled: true, appended: 1 });
+    expect(signed.statusCode).toBe(202);
+    expect(signed.json()).toMatchObject({ handled: true, queued: true });
   });
 });

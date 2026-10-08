@@ -29,6 +29,31 @@ describe("dashboard view-model", () => {
     expect(vm.recentTransactions).toEqual([]);
   });
 
+  it("shows why an uncertain account was excluded from the displayed USD total", () => {
+    const events = sequenced([
+      accountUpserted(deps, {
+        accountId: "euro-account",
+        type: "checking",
+        source: "plaid",
+        name: "Euro Checking",
+        currency: "EUR",
+        balanceCurrentMinor: 100_000,
+        balanceAsOf: "2026-07-07T08:00:00.000Z",
+        status: "active",
+        plaidItemId: "item-eur",
+        reconciliationStatus: "unknown",
+      }),
+    ]);
+    const vm = buildDashboardViewModel({
+      events,
+      todayLocal: "2026-07-07",
+      nowIso: "2026-07-07T09:00:00.000Z",
+    });
+
+    expect(vm.availableCashFormatted).toBe("$0.00");
+    expect(vm.balanceWarning).toBe("Non-USD accounts are excluded");
+  });
+
   it("formats amounts with sign and marks pending", () => {
     const events = sequenced([
       accountUpserted(deps, {

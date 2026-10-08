@@ -106,6 +106,60 @@ function demoEvents(deps: EventFactoryDeps) {
 }
 
 describe("offline outbox", () => {
+  it("serializes concurrent flush triggers for the same queue", async () => {
+    const { app } = await makeServer();
+    const { transport } = switchableTransport(app);
+    const log = new InMemoryDeviceLog();
+    const outbox = new InMemoryOutbox();
+    await outbox.enqueue(demoEvents(factory("device-a")));
+    let posts = 0;
+    const counted: SyncTransport = {
+      ...transport,
+      async postEvents(events) {
+        posts += 1;
+        await transport.postEvents(events);
+      },
+    };
+
+    const results = await Promise.all([
+      flushOutbox(counted, log, outbox),
+      flushOutbox(counted, log, outbox),
+    ]);
+
+    expect(posts).toBe(1);
+    expect(results.map((result) => result.flushed).sort((a, b) => a - b)).toEqual([0, 2]);
+    expect(await outbox.size()).toBe(0);
+  });
+
+  it("keeps uploaded actions queued until their server copies are downloaded", async () => {
+    const { app, deps: server } = await makeServer();
+    const { transport } = switchableTransport(app);
+    const log = new InMemoryDeviceLog();
+    const outbox = new InMemoryOutbox();
+    const uploadWorksButDownloadFails: SyncTransport = {
+      ...transport,
+      async getEventsSince() {
+        throw new Error("download failed");
+      },
+    };
+
+    const first = await sendOrQueue(
+      uploadWorksButDownloadFails,
+      log,
+      outbox,
+      demoEvents(factory("device-a")),
+    );
+
+    expect(first.status).toBe("queued");
+    expect(await outbox.size()).toBe(2);
+    expect(await log.all()).toHaveLength(0);
+    expect(await server.events.lastSequence("user-1")).toBe(2);
+
+    const recovered = await flushOutbox(transport, log, outbox);
+    expect(recovered).toEqual({ flushed: 2, pending: 0 });
+    expect((await log.all()).map((event) => event.sequence)).toEqual([1, 2]);
+  });
+
   it("offline action → queued + optimistic dashboard; reconnect → flush → server parity", async () => {
     const { app, deps: server } = await makeServer();
     const { transport, setOnline } = switchableTransport(app);
@@ -167,6 +221,24 @@ describe("offline outbox", () => {
     expect((await log.all()).map((e) => e.sequence)).toEqual([1, 2]);
   });
 
+  it("a stalled flush does not block the caller: queued within the bound, event still durable", async () => {
+    const { app } = await makeServer();
+    const { transport } = switchableTransport(app);
+    const log = new InMemoryDeviceLog();
+    const outbox = new InMemoryOutbox();
+
+    // postEvents succeeds, but the download leg (inside flushOutbox's own
+    // pullOnce) hangs forever — simulating a half-dead connection, not an
+    // outright failure.
+    const halfDead: SyncTransport = { ...transport, getEventsSince: () => new Promise(() => {}) };
+
+    const started = Date.now();
+    const result = await sendOrQueue(halfDead, log, outbox, demoEvents(factory("device-a")), 50);
+    expect(Date.now() - started).toBeLessThan(1_000); // bounded, not however long the hang lasts
+    expect(result.status).toBe("queued");
+    expect(await outbox.size()).toBe(2); // still durable locally — nothing lost
+  });
+
   it("purchase check fully offline: verdict renders, audit record queued, flush lands it", async () => {
     const { app, deps: server } = await makeServer();
     const { transport, setOnline } = switchableTransport(app);
@@ -207,5 +279,25 @@ describe("offline outbox", () => {
     expect((await outbox.all()).map((e) => e.idempotencyKey)).toEqual(
       events.map((e) => e.idempotencyKey),
     );
+  });
+
+  it("gives separate account edits separate retry identities", () => {
+    const deps = factory("device-a");
+    const account = {
+      accountId: "manual-checking",
+      type: "checking" as const,
+      source: "manual" as const,
+      name: "My Checking",
+      currency: "USD",
+      balanceCurrentMinor: 0,
+      balanceAsOf: NOW,
+      status: "active" as const,
+      openingBalanceMinor: 500_000,
+    };
+
+    const firstEdit = accountUpserted(deps, account);
+    const laterEditBackToSameValues = accountUpserted(deps, account);
+
+    expect(laterEditBackToSameValues.idempotencyKey).not.toBe(firstEdit.idempotencyKey);
   });
 });

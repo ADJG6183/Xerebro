@@ -41,6 +41,23 @@ export function renderTemplateExplanation(
     return `I can't answer yet — I'm missing: ${verification.missingInputs.join(", ")}.`;
   }
   if (verification.status === "CANT_VERIFY") {
+    // "Not established" (reconciliation never attempted, ADR-005: starts
+    // unknown) and "stale data" are different problems with different fixes
+    // — the first is NOT fixed by refreshing or reconnecting, so it must
+    // not be phrased like a transient freshness issue (rocketMoneyMvpSpec.md
+    // review: distinguish "update your bank" from "history verification
+    // isn't established"). This checks the specific sentinel reason
+    // verifyHighStakes uses for that exact case (confidence.ts) — a drift
+    // FAILURE after reconciliation WAS attempted is a different, more
+    // actionable situation and keeps the general phrasing below.
+    if (verification.reason === "Bank balance reconciliation is not established yet") {
+      return (
+        `I can't give verified bank-backed guidance yet — your bank balance hasn't been ` +
+        `matched against your transaction history, and refreshing or reconnecting won't change ` +
+        `that by itself. Based on your last known data you would have ${formatMinor(remaining)} ` +
+        `left after ${subject} and the next 30 days of bills — treat that as a sketch, not an answer.`
+      );
+    }
     const hours = Math.floor(verification.dataAgeSeconds / 3600);
     return (
       `I can't verify your balances right now (${verification.reason ?? "data unavailable"}). ` +

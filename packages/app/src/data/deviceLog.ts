@@ -17,8 +17,16 @@ export interface DeviceEventLog {
   lastSequence(): Promise<number>;
   /** Append server-sequenced events (idempotent per sequence). */
   append(events: readonly EventEnvelope[]): Promise<void>;
-  /** All stored events, ascending by sequence. */
+  /** All stored events, ascending by sequence. Full-log primitive: the
+   * rebuild-from-log repair path (ADR-003) and one-off callers without a
+   * projection cache need this. Callers that already track a sequence
+   * watermark (projectionCache.ts) should use since() instead — reading
+   * and decrypting the whole log on every render does not scale. */
   all(): Promise<EventEnvelope[]>;
+  /** Events with sequence strictly greater than afterSequence, ascending.
+   * The indexed delta read: avoids loading/decrypting history the caller
+   * has already folded. */
+  since(afterSequence: number): Promise<EventEnvelope[]>;
 }
 
 export class InMemoryDeviceLog implements DeviceEventLog {
@@ -38,5 +46,11 @@ export class InMemoryDeviceLog implements DeviceEventLog {
 
   async all(): Promise<EventEnvelope[]> {
     return [...this.bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+  }
+
+  async since(afterSequence: number): Promise<EventEnvelope[]> {
+    return [...this.bySequence.values()]
+      .filter((e) => e.sequence > afterSequence)
+      .sort((a, b) => a.sequence - b.sequence);
   }
 }

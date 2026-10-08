@@ -41,6 +41,7 @@ export function HomeScreen(props: {
         <Text style={styles.balanceLabel}>Available Cash</Text>
         <Text style={styles.balanceValue}>{vm.availableCashFormatted}</Text>
         <Text style={styles.balanceAge}>{vm.dataAgeLabel}</Text>
+        {vm.balanceWarning && <Text style={styles.balanceWarning}>{vm.balanceWarning}</Text>}
       </View>
 
       {vm.hasAccounts ? (
@@ -101,6 +102,7 @@ const styles = StyleSheet.create({
   balanceLabel: { color: theme.onPrimaryFaint, fontSize: 13 },
   balanceValue: { color: theme.onPrimary, fontSize: 36, fontWeight: "800", marginVertical: 4 },
   balanceAge: { color: theme.onPrimaryFaint, fontSize: 12 },
+  balanceWarning: { color: theme.onPrimary, fontSize: 12, marginTop: 6, fontWeight: "600" },
   askCard: {
     flexDirection: "row",
     alignItems: "center",

@@ -7,10 +7,11 @@
  * and the SERVER derives the user from it (SecurityPrivacy.md trust
  * boundary). A client that could name its user could name anyone's.
  */
-import type { EventEnvelope } from "@xerebro/engines";
+import type { ContinuityCommand, EventEnvelope } from "@xerebro/engines";
 import type { CopilotAnswer } from "./chat";
 import type { DeviceEventLog } from "./deviceLog";
 import type { Outbox } from "./outbox";
+import { withTimeout } from "./withTimeout";
 
 export interface SyncTransport {
   getEventsSince(since: number): Promise<{ events: EventEnvelope[]; lastSequence: number }>;
@@ -38,6 +39,21 @@ export interface SyncTransport {
   exchangePublicToken?(publicToken: string): Promise<{ itemId: string }>;
   /** Ask the server whether a Hosted Link session finished (no redirect). */
   completeLink?(linkToken: string): Promise<{ linked: boolean; itemId?: string }>;
+  listItems?(): Promise<{ items: ConnectedItem[] }>;
+  reviewAccountHistory?(command: ContinuityCommand): Promise<void>;
+  disconnectItem?(itemId: string): Promise<{ status: ConnectedItem["status"]; message?: string }>;
+}
+
+export interface ConnectedItem {
+  itemId: string;
+  status:
+    | "importing"
+    | "ready"
+    | "retry_needed"
+    | "reauthentication_needed"
+    | "disconnecting"
+    | "disconnected";
+  message?: string;
 }
 
 export interface PullResult {
@@ -79,16 +95,33 @@ export interface SubmitResult {
  * The offline-safe write path: queue first (durable), then try to flush.
  * A dead network downgrades the result to "queued" — the action is never
  * lost, and the UI can render it optimistically via withPending().
+ *
+ * The flush attempt is bounded: once the event is durably enqueued, this
+ * must not make a caller on an interactive path (a purchase check's audit
+ * write, a manual edit) wait on an unbounded network round trip
+ * (performanceBudget.md). A slow/dead network reports "queued" within
+ * `flushTimeoutMs` instead of up to the transport's own generic timeout
+ * (httpTransport.ts, currently 8s per call — postEvents + pullOnce can both
+ * be slow, compounding). The abandoned flush is NOT cancelled (plain
+ * promises can't be) — it keeps running in the background and still
+ * completes the outbox drain when the network allows; flushOutbox's own
+ * per-outbox mutex (flushTails below) makes that safe to overlap with any
+ * later call here.
  */
 export async function sendOrQueue(
   transport: SyncTransport,
   log: DeviceEventLog,
   outbox: Outbox,
   events: readonly Omit<EventEnvelope, "sequence">[],
+  flushTimeoutMs = 3_000,
 ): Promise<SubmitResult> {
   await outbox.enqueue(events);
-  const flushed = await flushOutbox(transport, log, outbox);
-  return { status: flushed.pending === 0 ? "synced" : "queued" };
+  try {
+    const flushed = await withTimeout(flushOutbox(transport, log, outbox), flushTimeoutMs);
+    return { status: flushed.pending === 0 ? "synced" : "queued" };
+  } catch {
+    return { status: "queued" };
+  }
 }
 
 export interface FlushResult {
@@ -96,13 +129,37 @@ export interface FlushResult {
   pending: number;
 }
 
+/** One drain at a time per durable queue. This avoids two UI/network triggers
+ * racing over the same snapshot and reporting contradictory pending counts. */
+const flushTails = new WeakMap<Outbox, Promise<void>>();
+
 /**
  * Drain the outbox: one POST for the whole queue (server-side batch key +
  * producer idempotency keys make retries after ambiguous failures safe),
- * dequeue on success, then pull so the log holds the server-sequenced
- * versions. On any network failure everything simply stays queued.
+ * pull the server-sequenced copies, then dequeue. Upload acknowledgement is
+ * not enough: if the following download fails, removing first would make a
+ * financial action disappear from both the log and the optimistic view.
  */
 export async function flushOutbox(
+  transport: SyncTransport,
+  log: DeviceEventLog,
+  outbox: Outbox,
+): Promise<FlushResult> {
+  const previous = flushTails.get(outbox) ?? Promise.resolve();
+  const operation = previous.catch(() => undefined).then(() => flushOutboxUnlocked(transport, log, outbox));
+  const tail = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  flushTails.set(outbox, tail);
+  try {
+    return await operation;
+  } finally {
+    if (flushTails.get(outbox) === tail) flushTails.delete(outbox);
+  }
+}
+
+async function flushOutboxUnlocked(
   transport: SyncTransport,
   log: DeviceEventLog,
   outbox: Outbox,
@@ -111,10 +168,10 @@ export async function flushOutbox(
   if (queued.length === 0) return { flushed: 0, pending: 0 };
   try {
     await transport.postEvents(queued);
-    await outbox.remove(queued.map((e) => e.idempotencyKey));
     await pullOnce(transport, log);
+    await outbox.remove(queued.map((e) => e.idempotencyKey));
     return { flushed: queued.length, pending: await outbox.size() };
   } catch {
-    return { flushed: 0, pending: queued.length };
+    return { flushed: 0, pending: await outbox.size() };
   }
 }

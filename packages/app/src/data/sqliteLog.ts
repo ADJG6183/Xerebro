@@ -62,6 +62,18 @@ export async function openSqliteDeviceLog(dbName = "xerebro.db"): Promise<Device
         .map((r) => readEnvelope<EventEnvelope>(r.envelope, cipher))
         .filter((e): e is EventEnvelope => e !== null);
     },
+
+    async since(afterSequence) {
+      // sequence is the table's PRIMARY KEY, so this is an indexed range
+      // scan, not a full-table read — the point of this method.
+      const rows = await db.getAllAsync<{ envelope: string }>(
+        "SELECT envelope FROM events WHERE sequence > ? ORDER BY sequence ASC",
+        afterSequence,
+      );
+      return rows
+        .map((r) => readEnvelope<EventEnvelope>(r.envelope, cipher))
+        .filter((e): e is EventEnvelope => e !== null);
+    },
   };
 }
 

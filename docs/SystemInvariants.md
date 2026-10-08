@@ -8,6 +8,8 @@ These rules are never violated. Each one is stated so it can be checked mechanic
 - Financial calculations are deterministic: same inputs + same `rules_version` + same `params_version` → identical output (property-tested in the engines package).
 - No LLM output is ever parsed into a balance, amount, or decision. The LLM's output type is display text only.
 - `high_stakes` recommendations require `VERIFIED` status. `read_only` surfaces may render stale data **only** with a visible data-age label. (Class definitions: verificationEngine.md.)
+- USD spending capacity excludes unsupported currencies and unknown account types. Missing available balances fall back to current minus pending withdrawals; pending inflows never increase spending capacity (ADR-005).
+- A fresh bank balance is not reconciliation proof. Bank-backed high-stakes guidance remains unverified until opening-checkpoint and history coverage establish reconciliation (ADR-005).
 
 ## Data Integrity
 

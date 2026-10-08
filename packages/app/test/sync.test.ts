@@ -133,7 +133,7 @@ describe("device ↔ server sync spine", () => {
 
     expect(vmA).toEqual(vmB); // same log, same numbers — multi-device determinism
     expect(vmA.availableCashFormatted).toBe("$7,331.58"); // 5,000 − 68.42 + 2,400
-    expect(vmA.dataAgeLabel).toBe("as of 2h ago");
+    expect(vmA.dataAgeLabel).toBe("based on your manual entries");
     // Same posted date → newest server sequence first (Salary was pushed last).
     expect(vmA.recentTransactions.map((t) => t.merchant)).toEqual(["Salary", "Grocery Store"]);
   });

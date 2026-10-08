@@ -20,9 +20,19 @@ import {
   PostgresAuthStore,
   PostgresEventStore,
   PostgresItemStore,
+  PostgresPlaidConnectionLifecycleStore,
+  PostgresLinkTokenOwners,
+  PostgresPlaidIngestionStore,
+  PostgresPlaidJobStore,
   PostgresTxnRegistry,
 } from "./persistence/postgres";
-import { InMemoryItemStore, InMemoryTxnRegistry } from "./plaid/stores";
+import {
+  InMemoryItemStore,
+  InMemoryPlaidIngestionStore,
+  InMemoryPlaidJobStore,
+  InMemoryTxnRegistry,
+} from "./plaid/stores";
+import { processNextPlaidJob } from "./plaid/lifecycle";
 
 /**
  * Dev-only .env loader (packages/server/.env, gitignored — see .env.example).
@@ -81,8 +91,17 @@ const tokens = process.env.PLAID_TOKEN_KEY
   ? createTokenVault(process.env.PLAID_TOKEN_KEY)
   : PLAINTEXT_DEV_VAULT;
 
-const app = await buildApp({
-  ...(llm ? { llm } : {}),
+const events = pool ? new PostgresEventStore(pool) : new InMemoryEventStore();
+const items = pool ? new PostgresItemStore(pool) : new InMemoryItemStore();
+const registry = pool ? new PostgresTxnRegistry(pool) : new InMemoryTxnRegistry();
+const ingestion = pool
+  ? new PostgresPlaidIngestionStore(pool)
+  : new InMemoryPlaidIngestionStore(events, items, registry);
+const jobs = pool ? new PostgresPlaidJobStore(pool) : new InMemoryPlaidJobStore();
+const linkTokenOwners = pool ? new PostgresLinkTokenOwners(pool) : undefined;
+const connectionLifecycle = pool ? new PostgresPlaidConnectionLifecycleStore(pool) : undefined;
+
+const runtimeDeps = {
   plaid: plaidConfig
     ? plaidHttpGateway(plaidConfig)
     : {
@@ -90,22 +109,48 @@ const app = await buildApp({
           throw new Error("Plaid not configured — set PLAID_CLIENT_ID and PLAID_SECRET");
         },
       },
-  ...(plaidConfig ? { plaidLink: plaidHttpLinkGateway(plaidConfig) } : {}),
+  events,
+  items,
+  registry,
+  ingestion,
+  jobs,
   tokens,
-  events: pool ? new PostgresEventStore(pool) : new InMemoryEventStore(),
-  items: pool ? new PostgresItemStore(pool) : new InMemoryItemStore(),
-  registry: pool ? new PostgresTxnRegistry(pool) : new InMemoryTxnRegistry(),
+  now: () => new Date().toISOString(),
+  newEventId: () => randomUUID(),
+};
+
+const app = await buildApp({
+  ...(llm ? { llm } : {}),
+  ...runtimeDeps,
+  ...(plaidConfig ? { plaidLink: plaidHttpLinkGateway(plaidConfig) } : {}),
+  ...(linkTokenOwners ? { linkTokenOwners } : {}),
+  ...(connectionLifecycle ? { connectionLifecycle } : {}),
   auth: pool
     ? new PostgresAuthStore(pool, { now: () => new Date().toISOString(), newId: () => randomUUID() })
     : new InMemoryAuthStore({ now: () => new Date().toISOString(), newId: () => randomUUID() }),
-  now: () => new Date().toISOString(),
-  newEventId: () => randomUUID(),
   // Real ES256 verification whenever Plaid is configured; the trust-all
   // stub only survives in fully-local manual mode (SecurityPrivacy.md).
   webhookVerifier: plaidConfig
     ? plaidWebhookVerifier(plaidKeyFetcher(plaidConfig))
     : DEV_TRUST_ALL_VERIFIER,
 });
+
+// Small durable worker: leases make overlapping ticks/processes safe. One
+// job per tick keeps event-loop work bounded; due work is picked up again on
+// the next tick, including after a server restart.
+let workerBusy = false;
+const worker = setInterval(async () => {
+  if (workerBusy) return;
+  workerBusy = true;
+  try {
+    await processNextPlaidJob(runtimeDeps);
+  } catch (error) {
+    console.error("Plaid lifecycle worker failed", error);
+  } finally {
+    workerBusy = false;
+  }
+}, 1_000);
+worker.unref();
 
 const port = Number(process.env.PORT ?? 3000);
 app

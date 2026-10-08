@@ -4,6 +4,7 @@
  * Remaining catalog types (buckets, goals, detectors) arrive with their subsystems.
  */
 import type { MinorUnits } from "./money";
+import type { AccountContinuity, OverlapReview } from "./projection/continuity";
 
 export type EventSource = "plaid" | "user" | "system" | "detector";
 
@@ -85,4 +86,7 @@ export type TransactionEvent =
   | TransactionPosted
   | TransactionUpdated
   | TransactionRemoved
-  | TransactionAnnotated;
+  | TransactionAnnotated
+  | EventEnvelope<"AccountContinuitySet", Omit<AccountContinuity, "lastSequence">>
+  | EventEnvelope<"TransactionOverlapReviewed", Omit<OverlapReview, "lastSequence">>
+  | EventEnvelope<"BankSyncCompleted", { itemId: string; completedAt: string }>;

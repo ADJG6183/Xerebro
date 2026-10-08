@@ -29,6 +29,15 @@ Remaining before a real-user launch: identity linking (passkeys — needs a
 development build), page-level SQLCipher (same dev build), an offline
 explanation-faithfulness eval harness, and signed zero-retention LLM terms.
 
+**Addendum (2026-10-06):** ADR-004 (atomic Plaid ingestion), ADR-005 (balance
+evidence policy), ADR-006 (durable Plaid lifecycle), and ADR-007 (reconnected-
+account continuity) are built and extend items 1–2 above; see
+accountIntegrationPlan.md for the staged delivery tracker. This hardens the
+original Accounts/Ingestion slice against a gap found in production-shaped
+testing (duplicate spending history on bank reconnection) — it is not scope
+added beyond the trust-loop question, since an unreconciled double-count would
+itself make "Can I buy this?" unverifiable.
+
 ## Explicitly deferred (contracts already written)
 
 | Feature | Where its contract lives |
@@ -41,6 +50,8 @@ explanation-faithfulness eval harness, and signed zero-retention LLM terms.
 | Debt/savings/goal rule families | decisionEngine.md |
 | Proactive insights + detectors beyond `PaycheckReceived` | EventArchitecture.md |
 | Multi-device polish, joint accounts, multi-currency | ADR-001, DataModel.md |
+| Plaid update-mode reauthentication | ADR-007 (explicitly out of scope) |
+| Advance-entry matching | ADR-007 (explicitly out of scope) |
 
 ## Design debt to clear before build
 

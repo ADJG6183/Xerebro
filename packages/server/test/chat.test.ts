@@ -79,6 +79,20 @@ async function seed(events: InMemoryEventStore, userId: string) {
 const JUNE = { fromDate: "2026-06-01", toDate: "2026-06-30" };
 
 describe("POST /chat", () => {
+  it("always appends the overlap warning even when the LLM omits it", async () => {
+    const gw = scriptedGateway({ tool: "spend_total", args: JUNE }, "You spent $0.00.");
+    const { app, events } = await appWith(gw);
+    const auth = await registerHeaders(app);
+    await seed(events, auth.userId);
+    await events.appendBatch(auth.userId, [{ eventId: "guard", type: "AccountContinuitySet", schemaVersion: 1,
+      occurredAt: "2026-07-12T10:00:00Z", source: "system", idempotencyKey: "guard",
+      payload: { accountId: "acc-1", candidates: [{ accountId: "old" }], decision: "pending" } }], "guard");
+    const res = await app.inject({ method: "POST", url: "/chat", headers: auth.headers,
+      payload: { question: "June spending?", todayLocal: "2026-07-12" } });
+    expect(res.json().answer).toContain("history is incomplete");
+    expect(res.json().data.total).toBe("$0.00");
+    await app.close();
+  });
   it("routes a spending question, executes deterministically, returns a faithful answer", async () => {
     const gw = scriptedGateway(
       { tool: "spend_total", args: JUNE },

@@ -42,7 +42,9 @@ High-stakes threshold: confidence ≥ 0.8 to answer as *verified*. The score, an
 - **Required inputs** — the rule set declares its inputs; missing input → `NEEDS_USER_INPUT` naming the field.
 - **Duplicate detection** — same account, amount, and date-window with distinct canonical ids → flag, exclude from state, queue for review.
 - **Pending vs posted** — pending amounts count against available cash; a pending txn never double-counts once its linked posted txn arrives (identity link, ADR-003).
+- **Balance evidence** — use reported available balance when present. Otherwise use current balance minus known pending withdrawals; never spend a pending inflow. Missing balances, unsupported currencies, and unknown account types remain visibly excluded (ADR-005).
 - **Balance reconciliation** — ledger-computed balance vs source-reported balance:
+  - Reconciliation starts `unknown`; freshness alone cannot change it to reconciled. A trustworthy opening checkpoint and sufficient history coverage are required (ADR-005).
   - Tolerance band: within **max($5, 1%)** → reconciled.
   - Minor drift (≤ $25): reconciled with reduced score; background task investigates (usually a missing pending).
   - Beyond that: `RECONCILIATION_FAILED` → **repair path**: full projection rebuild from the event log (ADR-003), then fresh aggregator snapshot resync. If drift persists post-repair, surface to the user with a one-tap "resync accounts" — verification failure must never silently disable recommendations (no zombie accounts).

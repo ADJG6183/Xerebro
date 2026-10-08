@@ -1,6 +1,11 @@
 import type { PlaidGateway, PlaidSyncPage, PlaidTransaction } from "../src/plaid/gateway";
 import { InMemoryEventStore } from "../src/eventStore";
-import { InMemoryItemStore, InMemoryTxnRegistry } from "../src/plaid/stores";
+import {
+  InMemoryItemStore,
+  InMemoryPlaidIngestionStore,
+  InMemoryPlaidJobStore,
+  InMemoryTxnRegistry,
+} from "../src/plaid/stores";
 import type { AppDeps } from "../src/app";
 import { DEV_TRUST_ALL_VERIFIER } from "../src/app";
 import { InMemoryAuthStore } from "../src/auth/store";
@@ -40,12 +45,16 @@ export async function makeDeps(pages: Record<string, PlaidSyncPage>): Promise<Ap
   let eventCounter = 0;
   let authCounter = 0;
   const items = new InMemoryItemStore();
+  const events = new InMemoryEventStore();
+  const registry = new InMemoryTxnRegistry();
   await items.put({ itemId: "item-1", userId: "user-1", accessTokenRef: "tok-ref", cursor: "" });
   return {
     plaid: new FakePlaidGateway(pages),
-    events: new InMemoryEventStore(),
+    events,
     items,
-    registry: new InMemoryTxnRegistry(),
+    registry,
+    ingestion: new InMemoryPlaidIngestionStore(events, items, registry),
+    jobs: new InMemoryPlaidJobStore(),
     now: () => "2026-07-07T12:00:00.000Z",
     newEventId: () => `evt-${++eventCounter}`,
     webhookVerifier: DEV_TRUST_ALL_VERIFIER,

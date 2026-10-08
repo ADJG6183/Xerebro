@@ -41,6 +41,7 @@ Xerebro is **local-first**. The device is where decisions happen; the backend is
 
 - **Down (server → device):** normalized financial events (server-ordered), rules and parameter sets **with versions**, account/institution metadata.
 - **Up (device → server):** user actions as events (bucket edits, annotations, manual transactions, confirmations), feedback records, device sync cursor.
+- **Exception — identity/continuity-review decisions:** account-reconnection and transaction-overlap review decisions (ADR-007) are *not* uploaded as ordinary device events. They require a synchronous, authenticated server command with optimistic concurrency (expected entity version + per-user sequence lock), because two devices racing to resolve the same ambiguous account identity must not both win. Gap found during reconciliation audit, 2026-10-06: the "confirmations" item above implied every confirmation is offline-capable; this class is the one exception, and it stays online-only by design, not by omission.
 
 ### Sync subsystem responsibilities
 

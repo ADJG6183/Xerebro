@@ -50,7 +50,7 @@ export interface VerificationResult {
   status: VerificationStatus;
   confidence: number;
   /** Which component bounded the score — stored on the audit record. */
-  boundedBy: "freshness" | "completeness" | "reconciliation";
+  boundedBy: "freshness" | "completeness" | "reconciliation" | "data_quality";
   dataAgeSeconds: number;
   missingInputs: string[];
   reason?: string;
@@ -61,18 +61,28 @@ export function verifyHighStakes(input: {
   windowSeconds?: number;
   requiredInputs: readonly string[];
   snapshot: Record<string, unknown>;
-  driftMinor: MinorUnits;
-  reportedBalanceMinor: MinorUnits;
+  /** Required for bank-backed decisions once reconciliation is established. */
+  driftMinor?: MinorUnits;
+  reportedBalanceMinor?: MinorUnits;
+  reconciliationRequired?: boolean;
+  /** System evidence gaps are not user-input requests. */
+  dataQualityIssues?: readonly string[];
 }): VerificationResult {
   const windowSeconds = input.windowSeconds ?? PURCHASE_FRESHNESS_WINDOW_SECONDS;
+  const reconciliationKnown =
+    input.driftMinor !== undefined && input.reportedBalanceMinor !== undefined;
 
   const scores = {
     freshness: freshnessScore(input.dataAgeSeconds, windowSeconds),
     completeness: completenessScore(input.requiredInputs, input.snapshot),
-    reconciliation: reconciliationScore(input.driftMinor, input.reportedBalanceMinor),
+    reconciliation: reconciliationKnown
+      ? reconciliationScore(input.driftMinor!, input.reportedBalanceMinor!)
+      : input.reconciliationRequired
+        ? 0
+        : 1,
   } as const;
 
-  let boundedBy: VerificationResult["boundedBy"] = "freshness";
+  let boundedBy: keyof typeof scores = "freshness";
   for (const key of ["completeness", "reconciliation"] as const) {
     if (scores[key] < scores[boundedBy]) boundedBy = key;
   }
@@ -90,6 +100,28 @@ export function verifyHighStakes(input: {
       dataAgeSeconds: input.dataAgeSeconds,
       missingInputs,
       reason: `Missing required inputs: ${missingInputs.join(", ")}`,
+    };
+  }
+
+  if (input.dataQualityIssues && input.dataQualityIssues.length > 0) {
+    return {
+      status: "CANT_VERIFY",
+      confidence: 0,
+      boundedBy: "data_quality",
+      dataAgeSeconds: input.dataAgeSeconds,
+      missingInputs: [],
+      reason: input.dataQualityIssues.join("; "),
+    };
+  }
+
+  if (input.reconciliationRequired && !reconciliationKnown) {
+    return {
+      status: "CANT_VERIFY",
+      confidence: 0,
+      boundedBy: "reconciliation",
+      dataAgeSeconds: input.dataAgeSeconds,
+      missingInputs: [],
+      reason: "Bank balance reconciliation is not established yet",
     };
   }
 

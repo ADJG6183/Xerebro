@@ -42,6 +42,16 @@ export function findMoneyViolations(value: unknown, path = "payload"): string[] 
 }
 
 const TXN_STATUS = new Set(["pending", "posted"]);
+const ACCOUNT_TYPES = new Set([
+  "checking",
+  "savings",
+  "cash",
+  "credit",
+  "loan",
+  "investment",
+  "unknown",
+]);
+const RECONCILIATION_STATUSES = new Set(["unknown", "reconciled", "minor_drift", "failed"]);
 
 type Shape = Record<string, unknown>;
 
@@ -49,6 +59,26 @@ type Shape = Record<string, unknown>;
 function structuralViolations(type: string, p: Shape): string[] {
   const v: string[] = [];
   switch (type) {
+    case "AccountContinuitySet":
+      if (!isNonEmptyString(p.accountId)) v.push("accountId is required");
+      if (!["pending", "same", "different"].includes(p.decision as string)) v.push("invalid continuity decision");
+      if (!Array.isArray(p.candidates) || p.candidates.some((c) => !c || typeof c !== "object" ||
+          !isNonEmptyString(c.accountId) || (c.lastSyncedAt !== undefined &&
+          (typeof c.lastSyncedAt !== "string" || !Number.isFinite(Date.parse(c.lastSyncedAt)))))) {
+        v.push("candidates must contain account IDs and optional timestamps");
+      }
+      if (p.decision === "same" && !isNonEmptyString(p.predecessorId)) v.push("predecessorId is required");
+      if (p.cutoffDate !== undefined && (typeof p.cutoffDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(p.cutoffDate))) v.push("invalid cutoffDate");
+      break;
+    case "TransactionOverlapReviewed":
+      if (!isNonEmptyString(p.txnId) || !isNonEmptyString(p.signature)) v.push("transaction and signature required");
+      if (!["duplicate", "unique", "reopen"].includes(p.decision as string)) v.push("invalid review decision");
+      if (!Number.isSafeInteger(p.continuitySequence)) v.push("continuitySequence required");
+      if (p.decision === "duplicate" && (!isNonEmptyString(p.originalTxnId) || !isNonEmptyString(p.originalSignature))) v.push("original transaction and signature required");
+      break;
+    case "BankSyncCompleted":
+      if (!isNonEmptyString(p.itemId) || typeof p.completedAt !== "string" || !Number.isFinite(Date.parse(p.completedAt))) v.push("item and valid completion timestamp required");
+      break;
     case "TransactionPosted":
       if (!isNonEmptyString(p.txnId)) v.push("txnId must be a non-empty string");
       if (!isNonEmptyString(p.accountId)) v.push("accountId must be a non-empty string");
@@ -75,6 +105,16 @@ function structuralViolations(type: string, p: Shape): string[] {
     case "AccountUpserted":
       if (!isNonEmptyString(p.accountId)) v.push("accountId must be a non-empty string");
       if (!Number.isSafeInteger(p.balanceCurrentMinor)) v.push("balanceCurrentMinor must be integer minor units");
+      if (!ACCOUNT_TYPES.has(p.type as string)) v.push("type must be a supported account classification");
+      if (p.balanceCurrentKnown !== undefined && typeof p.balanceCurrentKnown !== "boolean") {
+        v.push("balanceCurrentKnown must be boolean when present");
+      }
+      if (
+        p.reconciliationStatus !== undefined &&
+        !RECONCILIATION_STATUSES.has(p.reconciliationStatus as string)
+      ) {
+        v.push("reconciliationStatus must be unknown|reconciled|minor_drift|failed");
+      }
       if (!isSafeIntOrAbsent(p.openingBalanceMinor)) v.push("openingBalanceMinor must be integer minor units");
       if (!isNonEmptyString(p.balanceAsOf)) v.push("balanceAsOf must be a timestamp string");
       if (p.source !== "plaid" && p.source !== "manual") v.push("source must be plaid|manual");
@@ -87,6 +127,13 @@ function structuralViolations(type: string, p: Shape): string[] {
       if (!isNonEmptyString(p.billId)) v.push("billId must be a non-empty string");
       if (!Number.isSafeInteger(p.expectedAmountMinor)) v.push("expectedAmountMinor must be integer minor units");
       if (!isNonEmptyString(p.nextDue)) v.push("nextDue must be a local date string");
+      break;
+    case "BudgetPlanUpserted":
+      if (!isNonEmptyString(p.budgetPlanId)) v.push("budgetPlanId must be a non-empty string");
+      if (!isNonEmptyString(p.categoryId)) v.push("categoryId must be a non-empty string");
+      if (!isNonEmptyString(p.month)) v.push("month must be a local YYYY-MM string");
+      if (!Number.isSafeInteger(p.limitMinor)) v.push("limitMinor must be integer minor units");
+      if (typeof p.enabled !== "boolean") v.push("enabled must be a boolean");
       break;
     default:
       break; // unknown types: money scan only (catalog evolves)

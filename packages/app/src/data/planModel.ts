@@ -9,9 +9,12 @@
  * onto the numbers that decide "Can I buy this?", not a separate ledger.
  */
 import {
+  budgetProgress,
   buildSnapshot,
+  computeUpcomingObligationsMinor,
   formatMinor,
   type Bill,
+  type BudgetProgressRow,
   type Bucket,
   type EventEnvelope,
   type ProjectionSnapshot,
@@ -24,6 +27,23 @@ export interface BucketRow {
   targetFormatted?: string;
   /** 0–100, integer; absent target → undefined (no bar). */
   progressPercent?: number;
+}
+
+export interface BudgetRow {
+  budgetPlanId: string;
+  categoryId: string;
+  enabled: boolean;
+  limitFormatted: string;
+  spentFormatted: string;
+  remainingFormatted: string;
+  /** Negative remaining shown as an amount, not just a color (spec §6 Budget). */
+  overLimit: boolean;
+  /** 0–100+, integer; UI clamps the bar at 100 but reads this to decide the
+   * over-limit color, same convention as BucketRow. */
+  progressPercent: number;
+  /** Present only when nonzero — a category with no pending charges doesn't
+   * need the line at all. */
+  pendingFormatted?: string;
 }
 
 export interface BillRow {
@@ -40,6 +60,12 @@ export interface BillRow {
 export interface PlanViewModel {
   buckets: BucketRow[];
   bills: BillRow[];
+  /** Monthly category limits (rocketMoneyTracker.md stage 1 #1) — a
+   * SEPARATE section from buckets: reserved savings vs. a spending
+   * comparison target. Never affects totalAllocatedFormatted below. */
+  budgets: BudgetRow[];
+  /** Local YYYY-MM the budgets above reflect. */
+  budgetMonth: string;
   totalAllocatedFormatted: string;
   upcoming30dFormatted: string;
 }
@@ -49,9 +75,12 @@ export function buildPlanViewModel(input: {
   snapshot?: ProjectionSnapshot;
   events?: readonly EventEnvelope[];
   todayLocal: string;
+  /** Local YYYY-MM; defaults to the current month. */
+  budgetMonth?: string;
 }): PlanViewModel {
   const snap = input.snapshot ?? buildSnapshot(input.events ?? []);
   const { buckets, bills } = snap;
+  const budgetMonth = input.budgetMonth ?? input.todayLocal.slice(0, 7);
 
   return {
     buckets: buckets.map(bucketRow),
@@ -59,10 +88,32 @@ export function buildPlanViewModel(input: {
       .slice()
       .sort((a, b) => a.nextDue.localeCompare(b.nextDue))
       .map((b) => billRow(b, input.todayLocal)),
+    budgets: budgetProgress(snap.transactions, snap.budgetPlans, budgetMonth).map(budgetRow),
+    budgetMonth,
     totalAllocatedFormatted: formatMinor(
       buckets.reduce((sum, b) => sum + b.allocatedMinor, 0),
     ),
-    upcoming30dFormatted: formatMinor(sumDueWithin(bills, input.todayLocal, 30)),
+    // Same function the purchase decision reads (computeFinancialState) —
+    // this screen must never show a different "upcoming obligations"
+    // number than what actually governed the last verdict.
+    upcoming30dFormatted: formatMinor(computeUpcomingObligationsMinor(bills, input.todayLocal, 30)),
+  };
+}
+
+function budgetRow(p: BudgetProgressRow): BudgetRow {
+  return {
+    budgetPlanId: p.budgetPlanId,
+    categoryId: p.categoryId,
+    enabled: p.enabled,
+    limitFormatted: formatMinor(p.limitMinor),
+    spentFormatted: formatMinor(p.spentMinor),
+    // Over limit: show the actual remaining AMOUNT (now negative), never
+    // just a color (spec §6 Budget: "overspending is shown as an amount,
+    // not only color").
+    remainingFormatted: formatMinor(p.remainingMinor),
+    overLimit: p.overLimitMinor > 0,
+    progressPercent: p.limitMinor > 0 ? Math.round((p.spentMinor / p.limitMinor) * 100) : 0,
+    ...(p.pendingMinor > 0 ? { pendingFormatted: formatMinor(p.pendingMinor) } : {}),
   };
 }
 
@@ -99,22 +150,9 @@ function dueLabel(days: number): string {
   return `due in ${days} days`;
 }
 
-function sumDueWithin(bills: readonly Bill[], todayLocal: string, horizonDays: number): number {
-  const horizon = addDays(todayLocal, horizonDays);
-  return bills
-    .filter((b) => b.nextDue >= todayLocal && b.nextDue <= horizon)
-    .reduce((sum, b) => sum + b.expectedAmountMinor, 0);
-}
-
 /** Whole calendar days from `from` to `to` (UTC-noon to dodge DST edges). */
 function daysBetween(from: string, to: string): number {
   const a = Date.parse(`${from}T12:00:00Z`);
   const b = Date.parse(`${to}T12:00:00Z`);
   return Math.round((b - a) / 86_400_000);
-}
-
-function addDays(date: string, days: number): string {
-  const d = new Date(`${date}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }

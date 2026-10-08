@@ -126,19 +126,23 @@ export async function answerQuestion(
       user: JSON.stringify({ question: input.question, data: result.data }),
     });
   } catch {
-    return { answer: templateAnswer(result), tool: result.tool, source: "template", data: result.data };
+    return { answer: withWarning(templateAnswer(result), result), tool: result.tool, source: "template", data: result.data };
   }
 
   // 4. VERIFY — every figure must be one the tool computed, else drop the prose.
   if (!checkChatFaithful(phrased.text, result.figures).faithful) {
-    return { answer: templateAnswer(result), tool: result.tool, source: "template", data: result.data };
+    return { answer: withWarning(templateAnswer(result), result), tool: result.tool, source: "template", data: result.data };
   }
 
   return {
-    answer: phrased.text,
+    answer: withWarning(phrased.text, result),
     tool: result.tool,
     source: "llm",
     data: result.data,
     model: phrased.model,
   };
+}
+
+function withWarning(answer: string, result: ToolResult): string {
+  return typeof result.data.warning === "string" ? `${answer}\n\n${result.data.warning}` : answer;
 }

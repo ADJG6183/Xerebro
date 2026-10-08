@@ -1,22 +1,25 @@
 /**
- * Bottom tab bar per docs/uiDesign/image2.png: Home · Transactions · [FAB]
- * · Budget · Reports. Deliberate deviation: the mockup's center "+" adds a
- * transaction (that moved to the Transactions screen); ours opens the Copilot
- * chat (docs/copilotArchitecture.md) — the conversational assistant is the
- * product's differentiator and earns the primary action. "Can I buy this?"
- * lives on the Home hero card. Reports renders a placeholder until its milestone.
+ * Bottom tab bar per docs/uiDesign/image2.png: Home · Spending · [FAB] ·
+ * Budget · Accounts. "Transactions" evolved into "Spending" (summaries +
+ * complete-history detail, rocketMoneyMvpSpec.md §12, approved 2026-10-07).
+ * Bills becomes its own fifth destination in a later stage (§11 stage 3),
+ * not yet split out of Budget here. Deliberate deviation from the mockup:
+ * its center "+" adds a transaction (that moved to the Spending screen);
+ * ours opens the Copilot chat (docs/copilotArchitecture.md) — the
+ * conversational assistant is the product's differentiator and earns the
+ * primary action. "Can I buy this?" lives on the Home hero card.
  */
 import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { theme } from "./theme";
 
-export type Tab = "home" | "transactions" | "budget" | "reports";
+export type Tab = "home" | "spending" | "budget" | "accounts";
 
 const TABS: { key: Tab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "home", label: "Home", icon: "home" },
-  { key: "transactions", label: "Transactions", icon: "swap-horizontal" },
+  { key: "spending", label: "Spending", icon: "swap-horizontal" },
   { key: "budget", label: "Budget", icon: "wallet" },
-  { key: "reports", label: "Reports", icon: "bar-chart" },
+  { key: "accounts", label: "Accounts", icon: "card" },
 ];
 
 export function TabBar(props: { active: Tab; onTab: (t: Tab) => void; onAsk: () => void }) {

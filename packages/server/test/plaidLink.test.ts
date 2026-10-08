@@ -9,8 +9,7 @@ import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
 import type { PlaidAccount, PlaidLinkGateway } from "../src/plaid/gateway";
 import { createTokenVault, TokenVaultError } from "../src/plaid/tokenVault";
-import { syncPlaidBalances } from "../src/plaid/balances";
-import { toAccountType } from "../src/plaid/balances";
+import { syncPlaidBalances, toAccountEvent, toAccountType } from "../src/plaid/balances";
 import { makeDeps, page, registerHeaders } from "./helpers";
 import { InMemoryItemStore } from "../src/plaid/stores";
 import { itemStoreContract } from "./storeContract";
@@ -73,7 +72,7 @@ describe("balance mapping", () => {
     expect(toAccountType("depository", "prepaid")).toBe("cash");
     expect(toAccountType("credit", "credit card")).toBe("credit");
     expect(toAccountType("loan", "student")).toBe("loan");
-    expect(toAccountType("weird-new-type", null)).toBe("cash"); // never dropped
+    expect(toAccountType("weird-new-type", null)).toBe("unknown");
   });
 
   it("keeps LOCKED deposits out of spendable cash (real sandbox regression)", () => {
@@ -97,7 +96,33 @@ describe("balance mapping", () => {
     expect(payload.balanceAvailableMinor).toBe(120_050);
     expect(payload.source).toBe("plaid");
     expect(payload.plaidItemId).toBe("item-1");
+    expect(payload.mask).toBe("0000");
     expect(payload.balanceAsOf).toBe(deps.now()); // the freshness anchor
+    expect(payload.reconciliationStatus).toBe("unknown");
+  });
+
+  it("preserves an unknown balance and currency instead of turning either into zero USD", () => {
+    const account = toAccountEvent(
+      {
+        ...ACCOUNT,
+        balances: { current: null, available: null, iso_currency_code: null },
+      },
+      "item-1",
+      "2026-09-05T12:00:00.000Z",
+    );
+
+    expect(account.balanceCurrentMinor).toBe(0);
+    expect(account.balanceCurrentKnown).toBe(false);
+    expect(account.balanceAvailableMinor).toBeUndefined();
+    expect(account.currency).toBe("UNKNOWN");
+  });
+
+  it("rejects a malformed balance response without appending an empty success", async () => {
+    const deps = await makeDeps({});
+    deps.plaid.accountsBalanceGet = async () => "not-an-array" as unknown as PlaidAccount[];
+
+    await expect(syncPlaidBalances(deps, "item-1")).rejects.toThrow(/invalid Plaid accounts/);
+    expect(await deps.events.eventsSince("user-1", 0)).toEqual([]);
   });
 });
 
@@ -194,6 +219,14 @@ describe("link routes", () => {
     });
     expect(ok.statusCode).toBe(200);
     expect((await deps.items.get("item-new"))?.userId).toBe(victim.userId);
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/plaid/complete",
+      headers: victim.headers,
+      payload: { linkToken },
+    });
+    expect(replay.statusCode).toBe(403); // successful completion consumes ownership
   });
 
   it("SECURITY: an unknown or expired link token is refused", async () => {

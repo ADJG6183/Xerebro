@@ -26,11 +26,16 @@ export interface AppendResult {
   deduped: boolean;
 }
 
+export class EventSequenceConflict extends Error {
+  constructor() { super("Account history changed. Refresh and try again."); }
+}
+
 export interface EventStore {
   appendBatch(
     userId: string,
     events: readonly UnsequencedEvent[],
     batchKey: string,
+    expectedSequence?: number,
   ): Promise<AppendResult>;
   /** Delta sync: events with sequence > since, oldest first. */
   eventsSince(userId: string, since: number, limit?: number): Promise<EventEnvelope[]>;
@@ -46,11 +51,13 @@ export class InMemoryEventStore implements EventStore {
     userId: string,
     events: readonly UnsequencedEvent[],
     batchKey: string,
+    expectedSequence?: number,
   ): Promise<AppendResult> {
     const batches = getOrInit(this.processedBatchKeys, userId, () => new Set<string>());
     if (batches.has(batchKey)) return { appended: [], deduped: true };
 
     const log = getOrInit(this.logs, userId, () => []);
+    if (expectedSequence !== undefined && log.length !== expectedSequence) throw new EventSequenceConflict();
     const seen = getOrInit(this.seenIdempotencyKeys, userId, () => new Set<string>());
 
     const appended: EventEnvelope[] = [];

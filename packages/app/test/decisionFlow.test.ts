@@ -25,7 +25,13 @@ import {
   submitFeedback,
   type DecisionFlowDeps,
 } from "../src/data/decisionFlow";
-import { accountUpserted, manualTransaction, type EventFactoryDeps } from "../src/data/userEvents";
+import {
+  accountUpserted,
+  billUpserted,
+  bucketUpserted,
+  manualTransaction,
+  type EventFactoryDeps,
+} from "../src/data/userEvents";
 
 const NOW = "2026-07-07T10:00:00.000Z";
 
@@ -126,6 +132,78 @@ function makeFlow(transport: SyncTransport): DecisionFlowDeps {
 }
 
 describe("runPurchaseCheck", () => {
+  it("uses queued offline expenses in the same financial picture as the dashboard", async () => {
+    const { app } = await makeServer();
+    const flow = makeFlow(injectTransport(app));
+    await pushUserEvents(flow.transport, flow.log, [
+      accountUpserted(flow.factory, {
+        accountId: "manual-checking",
+        type: "checking",
+        source: "manual",
+        name: "My Checking",
+        currency: "USD",
+        balanceCurrentMinor: 100_000,
+        balanceAsOf: NOW,
+        status: "active",
+        openingBalanceMinor: 100_000,
+      }),
+    ]);
+    await flow.outbox.enqueue([
+      manualTransaction(flow.factory, {
+        txnId: "queued-expense",
+        accountId: "manual-checking",
+        amountMinor: -80_000,
+        currency: "USD",
+        status: "posted",
+        postedDate: "2026-07-07",
+        merchantRaw: "Queued expense",
+        categorySource: "user",
+      }),
+    ]);
+
+    const result = await runPurchaseCheck(flow, 40_000);
+
+    expect(result.record.decision.inputsSnapshot.availableCashMinor).toBe(20_000);
+    expect(result.record.decision.decision).toBe("decline");
+  });
+
+  it("uses queued buckets and bills in purchase decisions", async () => {
+    const { app } = await makeServer();
+    const flow = makeFlow(injectTransport(app));
+    await pushUserEvents(flow.transport, flow.log, [
+      accountUpserted(flow.factory, {
+        accountId: "manual-checking",
+        type: "checking",
+        source: "manual",
+        name: "My Checking",
+        currency: "USD",
+        balanceCurrentMinor: 100_000,
+        balanceAsOf: NOW,
+        status: "active",
+        openingBalanceMinor: 100_000,
+      }),
+    ]);
+    await flow.outbox.enqueue([
+      bucketUpserted(flow.factory, {
+        bucketId: "emergency",
+        name: "Emergency fund",
+        allocatedMinor: 30_000,
+      }),
+      billUpserted(flow.factory, {
+        billId: "rent",
+        name: "Rent",
+        expectedAmountMinor: 40_000,
+        nextDue: "2026-07-20",
+      }),
+    ]);
+
+    const result = await runPurchaseCheck(flow, 40_000);
+
+    expect(result.record.decision.inputsSnapshot.availableCashMinor).toBe(70_000);
+    expect(result.record.decision.inputsSnapshot.upcomingObligationsMinor).toBe(40_000);
+    expect(result.record.decision.decision).toBe("decline");
+  });
+
   it("manual-only state is freshness-exempt: VERIFIED despite week-old entry timestamps", async () => {
     const { app, deps } = await makeServer();
     const flow = makeFlow(injectTransport(app));
@@ -176,6 +254,8 @@ describe("runPurchaseCheck", () => {
                 currency: "USD",
                 balanceCurrentMinor: 300_000,
                 balanceAvailableMinor: 300_000,
+                reconciliationStatus: "reconciled",
+                reconciliationDriftMinor: 0,
                 balanceAsOf: NOW, // fresh!
                 status: "active",
                 plaidItemId: "item-9",
@@ -207,6 +287,8 @@ describe("runPurchaseCheck", () => {
             currency: "USD",
             balanceCurrentMinor: 300_000,
             balanceAvailableMinor: 300_000,
+            reconciliationStatus: "reconciled",
+            reconciliationDriftMinor: 0,
             balanceAsOf: "2026-07-05T18:00:00.000Z", // ~40h before NOW
             status: "active",
             plaidItemId: "item-9",
@@ -220,6 +302,45 @@ describe("runPurchaseCheck", () => {
     expect(result.record.verification.status).toBe("VERIFIED"); // refresh won the race
     expect(result.record.verification.dataAgeSeconds).toBe(0);
     expect(result.manualDataOnly).toBe(false);
+  });
+
+  it("a fresh bank balance remains CANT_VERIFY until reconciliation is established", async () => {
+    const { app, deps } = await makeServer();
+    const flow = makeFlow(injectTransport(app));
+    await deps.events.appendBatch(
+      "user-1",
+      [
+        {
+          eventId: "srv-fresh-unreconciled",
+          type: "AccountUpserted",
+          schemaVersion: 1,
+          occurredAt: NOW,
+          source: "plaid",
+          idempotencyKey: "seed:fresh-unreconciled",
+          payload: {
+            accountId: "plaid-unreconciled",
+            type: "checking",
+            source: "plaid",
+            name: "Bank Checking",
+            currency: "USD",
+            balanceCurrentMinor: 300_000,
+            balanceAvailableMinor: 295_000,
+            balanceAsOf: NOW,
+            status: "active",
+            plaidItemId: "item-10",
+            reconciliationStatus: "unknown",
+          },
+        },
+      ],
+      "seed-unreconciled",
+    );
+
+    const result = await runPurchaseCheck(flow, 60_000);
+
+    expect(result.record.verification.status).toBe("CANT_VERIFY");
+    expect(result.record.verification.boundedBy).toBe("reconciliation");
+    expect(result.record.verification.reason).toContain("not established");
+    expect(result.record.decision.inputsSnapshot.availableCashMinor).toBe(295_000);
   });
 
   it("refresh timeout → CANT_VERIFY: answer renders, labeled, never fabricated", async () => {
@@ -264,6 +385,38 @@ describe("runPurchaseCheck", () => {
     expect(result.explanation).toContain("40h ago");
     expect(result.record.decision.decision).toBeTruthy(); // decision still computed
     expect(result.recordStatus).toBe("synced"); // CANT_VERIFY answers are audited too
+  });
+
+  it("a stalled initial pull does not hang the purchase check: bounded, falls back to local cache", async () => {
+    const { app } = await makeServer();
+    const base = injectTransport(app);
+    const flow = makeFlow(base);
+    // Seed through the working transport so the device log genuinely has
+    // the account before the hang is introduced.
+    await seedManualAccount(flow);
+    // Now swap in a transport whose FIRST pull hangs forever — the purchase
+    // check must still bound its wait and fall back to the (already-seeded)
+    // cache. Only the first call hangs: runPurchaseCheck's own audit-record
+    // write also pulls internally (syncClient.ts's flushOutbox), on a path
+    // this slice does NOT bound (tracked as a known gap) — hanging that one
+    // too would make this test time out on an unrelated, already-flagged
+    // limitation instead of proving the thing it's actually testing.
+    let pullCalls = 0;
+    flow.transport = {
+      ...base,
+      getEventsSince: (since) => {
+        pullCalls += 1;
+        return pullCalls === 1 ? new Promise(() => {}) : base.getEventsSince(since);
+      },
+    };
+
+    const started = Date.now();
+    const result = await runPurchaseCheck(flow, 1_000);
+    // Generous wall-clock ceiling: proves the unbounded await is gone, without
+    // coupling the test to the exact internal timeout value.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.offline).toBe(true);
+    expect(result.record.decision.decision).toBeTruthy(); // still computed from local cache
   });
 
   it("submitFeedback lands a FeedbackSubmitted event in the server log", async () => {
